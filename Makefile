@@ -1,10 +1,10 @@
 CXX := g++
 
-SRC_FILES := trace_converter.cc
-# OBJ_FILES := $(patsubst %.cc,%.o,$(SRC_FILES))
-EXE_FILE := trace_converter
-
 BUILD_DIR := build
+
+SRC_FILES := trace_converter.cc
+# OBJ_FILES := $(patsubst %.cc,$(BUILD_DIR)/%.o,$(SRC_FILES))
+EXE_FILE := trace_converter
 
 COMPILER_FLAGS_COMMON := -std=gnu++11 -Wall -o $(BUILD_DIR)/$(EXE_FILE)
 
