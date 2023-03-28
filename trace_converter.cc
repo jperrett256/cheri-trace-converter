@@ -8,6 +8,8 @@
 
 #include <iostream>
 #include <fstream>
+#include <unordered_map>
+#include <unordered_set>
 
 // #include <boost/filesystem.hpp>
 #include <boost/iostreams/filter/gzip.hpp>
@@ -18,75 +20,105 @@
 typedef struct stats_t stats_t;
 struct stats_t
 {
-    uint64_t num_total;
+    uint64_t num_instructions;
+    uint64_t num_instructions_no_paddr;
+
+    uint64_t num_mem_accesses;
 
     uint64_t num_LOADs;
     uint64_t num_STOREs;
     uint64_t num_CLOADs;
     uint64_t num_CSTOREs;
 
-    uint64_t num_STOREs_missing_cap_info;
-    uint64_t num_CLOADs_missing_cap_info;
-    uint64_t num_CSTOREs_missing_cap_info;
+    uint64_t num_LOADs_no_paddr;
+    uint64_t num_STOREs_no_paddr;
+    uint64_t num_CLOADs_no_paddr;
+    uint64_t num_CSTOREs_no_paddr;
+
+    uint64_t num_CLOADs_no_tag;
+    uint64_t num_CSTOREs_no_tag;
 };
 
-stats_t dbg_stats = {0};
-
-void update_stats(tag_tracing_entry_t entry)
+void update_stats(stats_t * stats, tag_tracing_entry_t entry)
 {
-    dbg_stats.num_total++;
+    if (entry.type != TAG_TRACING_TYPE_INSTR) stats->num_mem_accesses++;
 
     switch (entry.type)
     {
+        case TAG_TRACING_TYPE_INSTR:
+        {
+            stats->num_instructions++;
+
+            if (!entry.paddr) stats->num_instructions_no_paddr++;
+        } break;
         case TAG_TRACING_TYPE_LOAD:
         {
-            dbg_stats.num_LOADs++;
+            stats->num_LOADs++;
+
+            if (!entry.paddr) stats->num_LOADs_no_paddr++;
         } break;
         case TAG_TRACING_TYPE_STORE:
         {
-            dbg_stats.num_STOREs++;
+            stats->num_STOREs++;
 
-            if (entry.paddr == 0) dbg_stats.num_STOREs_missing_cap_info++;
-            assert(entry.tag_value != TAG_TRACING_TAG_UNKNOWN);
+            if (!entry.paddr) stats->num_STOREs_no_paddr++;
+            assert(entry.tag_value == TAG_TRACING_TAG_CLEARED);
         } break;
         case TAG_TRACING_TYPE_CLOAD:
         {
-            dbg_stats.num_CLOADs++;
+            stats->num_CLOADs++;
 
-            if (entry.paddr == 0)
-            {
-                // TODO check tag value for custom_traces_001?
-                // assert(entry.tag_value == TAG_TRACING_TAG_UNKNOWN);
-                dbg_stats.num_CLOADs_missing_cap_info++;
-            }
+            if (!entry.paddr) stats->num_CLOADs_no_paddr++;
+            if (entry.tag_value == TAG_TRACING_TAG_UNKNOWN) stats->num_CLOADs_no_tag++;
         } break;
         case TAG_TRACING_TYPE_CSTORE:
         {
-            dbg_stats.num_CSTOREs++;
+            stats->num_CSTOREs++;
 
-            if (entry.paddr == 0)
-            {
-                assert(entry.tag_value == TAG_TRACING_TAG_UNKNOWN);
-                dbg_stats.num_CSTOREs_missing_cap_info++;
-            }
+            if (!entry.paddr) stats->num_CSTOREs_no_paddr++;
+            if (entry.tag_value == TAG_TRACING_TAG_UNKNOWN) stats->num_CSTOREs_no_tag++;
         } break;
-        default: assert(entry.type == TAG_TRACING_TYPE_INSTR);
+        default: assert(!"Impossible.");
     }
 }
 
-void print_stats(void)
+void print_stats(stats_t * stats)
 {
     printf("Statistics:\n");
-    printf("\tTotal: %lu\n", dbg_stats.num_total);
-    printf("\tLOADs: %lu\n", dbg_stats.num_LOADs);
-    printf("\tSTOREs: %lu\n", dbg_stats.num_STOREs);
-    printf("\tCLOADs: %lu\n", dbg_stats.num_CLOADs);
-    printf("\tCSTOREs: %lu\n", dbg_stats.num_CSTOREs);
-    printf("\tSTOREs missing capability information: %lu\n", dbg_stats.num_STOREs_missing_cap_info);
-    printf("\tCLOADs missing capability information: %lu\n", dbg_stats.num_CLOADs_missing_cap_info);
-    printf("\tCSTOREs missing capability information: %lu\n", dbg_stats.num_CSTOREs_missing_cap_info);
+    printf("\tInstructions: %lu\n", stats->num_instructions);
+    printf("\tInstructions without paddr: %lu\n", stats->num_instructions_no_paddr);
+    printf("\tTotal memory accesses: %lu\n", stats->num_mem_accesses);
+    printf("\n");
+    printf("\tLOADs: %lu\n", stats->num_LOADs);
+    printf("\tLOADs without paddr: %lu\n", stats->num_LOADs_no_paddr);
+    printf("\tSTOREs: %lu\n", stats->num_STOREs);
+    printf("\tSTOREs without paddr: %lu\n", stats->num_STOREs_no_paddr);
+    printf("\tCLOADs: %lu\n", stats->num_CLOADs);
+    printf("\tCLOADs without paddr: %lu\n", stats->num_CLOADs_no_paddr);
+    printf("\tCSTOREs: %lu\n", stats->num_CSTOREs);
+    printf("\tCSTOREs without paddr: %lu\n", stats->num_CSTOREs_no_paddr);
+    printf("\n");
+    printf("\tCLOADs missing tag information: %lu\n", stats->num_CLOADs_no_tag);
+    printf("\tCSTOREs missing tag information: %lu\n", stats->num_CSTOREs_no_tag);
 }
 
+const char * get_type_string(uint8_t type)
+{
+    switch (type)
+    {
+        case TAG_TRACING_TYPE_INSTR:
+            return "INSTR";
+        case TAG_TRACING_TYPE_LOAD:
+            return "LOAD";
+        case TAG_TRACING_TYPE_STORE:
+            return "STORE";
+        case TAG_TRACING_TYPE_CLOAD:
+            return "CLOAD";
+        case TAG_TRACING_TYPE_CSTORE:
+            return "CSTORE";
+        default: assert(!"Impossible.");
+    }
+}
 
 bool file_exists(char * filename)
 {
@@ -101,8 +133,14 @@ void quit(void)
     exit(1);
 }
 
+uint64_t get_page_start(uint64_t addr)
+{
+    return addr & ~((1 << 12) - 1);
+}
+
 int main(int argc, char * argv[])
 {
+
     if (argc == 2) /* just reads and prints statistics */
     {
         char * input_filename = argv[1];
@@ -110,6 +148,8 @@ int main(int argc, char * argv[])
         boost::iostreams::filtering_istream input_trace_data;
         input_trace_data.push(boost::iostreams::gzip_decompressor());
         input_trace_data.push(boost::iostreams::file_descriptor_source(input_filename));
+
+        stats_t global_stats = {0};
 
         while (true)
         {
@@ -127,23 +167,19 @@ int main(int argc, char * argv[])
                 break;
             }
 
-            update_stats(current_entry);
+            update_stats(&global_stats, current_entry);
         }
 
-        print_stats();
+        print_stats(&global_stats);
 
         // NOTE just being explicit, the destructors would probably do this anyway
         boost::iostreams::close(input_trace_data);
 
     }
-    else if (argc == 4) /* for removing drcachesim trace header/footer (mistakenly left in) */
+    else if (argc == 3) /* for removing drcachesim trace header/footer (mistakenly left in) */
     {
         char * input_filename = argv[1];
         char * output_filename = argv[2];
-
-        unsigned long long num_entries_ull = strtoull(argv[3], NULL, 10);
-        assert(num_entries_ull <= INT64_MAX);
-        int64_t num_entries = (int64_t) num_entries_ull;
 
         if (file_exists(output_filename))
         {
@@ -160,57 +196,93 @@ int main(int argc, char * argv[])
         output_trace_data.push(boost::iostreams::gzip_compressor());
         output_trace_data.push(boost::iostreams::file_descriptor_sink(output_filename));
 
-        /* CONSUME HEADER */
-        {
-            trace_entry_t drcachesim_entry;
-            input_trace_data.read((char *) &drcachesim_entry, sizeof(trace_entry_t)); // header
-            assert(input_trace_data);
-            assert(drcachesim_entry.type == TRACE_TYPE_HEADER);
-            input_trace_data.read((char *) &drcachesim_entry, sizeof(trace_entry_t)); // thread
-            assert(input_trace_data);
-            assert(drcachesim_entry.type == TRACE_TYPE_THREAD);
-            input_trace_data.read((char *) &drcachesim_entry, sizeof(trace_entry_t)); // pid
-            assert(input_trace_data);
-            assert(drcachesim_entry.type == TRACE_TYPE_PID);
-            input_trace_data.read((char *) &drcachesim_entry, sizeof(trace_entry_t)); // timestamp
-            assert(input_trace_data);
-            assert(drcachesim_entry.type == TRACE_TYPE_MARKER);
-            assert(drcachesim_entry.size == TRACE_MARKER_TYPE_TIMESTAMP);
-            input_trace_data.read((char *) &drcachesim_entry, sizeof(trace_entry_t)); // cpuid
-            assert(input_trace_data);
-            assert(drcachesim_entry.type == TRACE_TYPE_MARKER);
-            assert(drcachesim_entry.size == TRACE_MARKER_TYPE_CPU_ID);
-        }
+        std::unordered_map<uint64_t, uint64_t> page_table;
+        std::unordered_set<uint64_t> dbg_pages_without_mapping;
 
-        for (int64_t i = 0; i < num_entries; i++)
+        stats_t global_stats_before = {0};
+        stats_t global_stats_after = {0};
+
+        uint64_t dbg_num_addr_mapping_changes = 0;
+
+        while (true)
         {
             tag_tracing_entry_t current_entry = {0};
-            input_trace_data.read((char *) &current_entry, sizeof(tag_tracing_entry_t));
+            input_trace_data.read((char *) &current_entry, sizeof(current_entry));
 
-            assert(input_trace_data);
+            if (!input_trace_data)
+            {
+                static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen for gcount may be inappropriate.");
+                int32_t bytes_read = (int32_t) input_trace_data.gcount();
+                if (input_trace_data.gcount() != 0)
+                {
+                    printf("ERROR: only able to read %d bytes???\n", bytes_read);
+                }
+                break;
+            }
+
+            update_stats(&global_stats_before, current_entry);
+
+            uint64_t vaddr = current_entry.vaddr;
+            uint64_t paddr = current_entry.paddr;
+            assert(vaddr);
+
+            if (paddr)
+            {
+                auto table_entry = page_table.find(get_page_start(vaddr));
+                if (table_entry != page_table.end())
+                {
+                    uint64_t paddr_page = table_entry->second;
+                    // TODO why is virtual-physical mapping changing during execution (userspace traces)?
+                    if (paddr_page != get_page_start(paddr))
+                    {
+                        dbg_num_addr_mapping_changes++;
+                        printf("WARNING: page table mapping changed at instruction %lu.\n",
+                            global_stats_before.num_instructions);
+                        printf(
+                            "vaddr: " TARGET_FMT_lx ", old paddr page: " TARGET_FMT_lx
+                            ", new paddr page: " TARGET_FMT_lx ", type: %s\n",
+                            vaddr, paddr_page, get_page_start(paddr), get_type_string(current_entry.type));
+                    }
+                    // assert(paddr_page == get_page_start(paddr));
+                }
+
+                page_table[get_page_start(vaddr)] = get_page_start(paddr);
+            }
+            else
+            {
+                auto table_entry = page_table.find(get_page_start(vaddr));
+                if (table_entry != page_table.end())
+                {
+                    uint64_t paddr_page = table_entry->second;
+                    assert(paddr_page);
+
+                    current_entry.paddr = paddr_page + (vaddr - get_page_start(vaddr));
+                    // printf("vaddr is: " TARGET_FMT_lx ", set paddr to: " TARGET_FMT_lx "\n",
+                    //     current_entry.vaddr, current_entry.paddr);
+                }
+                else
+                {
+                    // NOTE to see how many pages the entries without valid mappings correspond to
+                    dbg_pages_without_mapping.insert(get_page_start(vaddr));
+                }
+            }
 
             output_trace_data.write((char *) &current_entry, sizeof(tag_tracing_entry_t));
-
-            update_stats(current_entry);
+            update_stats(&global_stats_after, current_entry);
         }
 
-        /* CONSUME FOOTER */
-        {
-            trace_entry_t drcachesim_entry;
-            input_trace_data.read((char *) &drcachesim_entry, sizeof(trace_entry_t)); // footer
-            assert(input_trace_data);
-            assert(drcachesim_entry.type == TRACE_TYPE_FOOTER);
-        }
+        printf("\n");
 
-        /* CHECK AT END */
-        {
-            char dbg_buf[sizeof(tag_tracing_entry_t) * 4];
-            input_trace_data.read((char *) &dbg_buf, sizeof(dbg_buf));
-            assert(!input_trace_data);
-            assert(input_trace_data.gcount() == 0);
-        }
+        printf("Input:\n");
+        print_stats(&global_stats_before);
+        printf("\n");
 
-        print_stats();
+        printf("Output:\n");
+        print_stats(&global_stats_after);
+        printf("\n");
+
+        printf("Strange mapping changes: %lu\n", dbg_num_addr_mapping_changes);
+        printf("Pages without paddr mappings: %lu\n", (uint64_t) dbg_pages_without_mapping.size());
 
         // NOTE just being explicit, the destructors would probably do this anyway
         boost::iostreams::close(input_trace_data);
@@ -218,7 +290,7 @@ int main(int argc, char * argv[])
     }
     else
     {
-        printf("Usage: %s <input trace> [<output trace> <num entries>]\n", argv[0]);
+        printf("Usage: %s <input trace> [<output trace>]\n", argv[0]);
         quit();
     }
 
