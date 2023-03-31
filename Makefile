@@ -13,7 +13,8 @@ COMPILER_FLAGS_RELEASE := $(COMPILER_FLAGS_COMMON) -O2
 
 LINKER_FLAGS = -lz -lboost_iostreams
 
-all: debug
+# all: debug
+all: release
 
 debug: build_dir
 	$(CXX) $(COMPILER_FLAGS_DEBUG) $(SRC_FILES) $(LINKER_FLAGS)

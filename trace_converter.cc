@@ -140,7 +140,6 @@ uint64_t get_page_start(uint64_t addr)
 
 int main(int argc, char * argv[])
 {
-
     if (argc == 2) /* just reads and prints statistics */
     {
         char * input_filename = argv[1];
@@ -197,6 +196,7 @@ int main(int argc, char * argv[])
         output_trace_data.push(boost::iostreams::file_descriptor_sink(output_filename));
 
         std::unordered_map<uint64_t, uint64_t> page_table;
+        std::unordered_set<uint64_t> dbg_pages_changed_mapping;
         std::unordered_set<uint64_t> dbg_pages_without_mapping;
 
         stats_t global_stats_before = {0};
@@ -236,6 +236,8 @@ int main(int argc, char * argv[])
                     if (paddr_page != get_page_start(paddr))
                     {
                         dbg_num_addr_mapping_changes++;
+                        dbg_pages_changed_mapping.insert(get_page_start(vaddr));
+
                         printf("WARNING: page table mapping changed at instruction %lu.\n",
                             global_stats_before.num_instructions);
                         printf(
@@ -281,7 +283,8 @@ int main(int argc, char * argv[])
         print_stats(&global_stats_after);
         printf("\n");
 
-        printf("Strange mapping changes: %lu\n", dbg_num_addr_mapping_changes);
+        printf("Mapping changes: %lu\n", dbg_num_addr_mapping_changes);
+        printf("Pages with mapping changes: %lu\n", (uint64_t) dbg_pages_changed_mapping.size());
         printf("Pages without paddr mappings: %lu\n", (uint64_t) dbg_pages_without_mapping.size());
 
         // NOTE just being explicit, the destructors would probably do this anyway
