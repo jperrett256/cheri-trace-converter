@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <zlib.h>
 
 #include <iostream>
 #include <fstream>
@@ -144,25 +145,27 @@ int main(int argc, char * argv[])
     {
         char * input_filename = argv[1];
 
-        boost::iostreams::filtering_istream input_trace_data;
-        input_trace_data.push(boost::iostreams::gzip_decompressor());
-        input_trace_data.push(boost::iostreams::file_descriptor_source(input_filename));
+        gzFile input_trace_file = gzopen(input_filename, "rb");
+        assert(input_trace_file);
+
+        // TODO tune buffer size with gzbuffer? manual buffering?
 
         stats_t global_stats = {0};
 
         while (true)
         {
             tag_tracing_entry_t current_entry = {0};
-            input_trace_data.read((char *) &current_entry, sizeof(current_entry));
 
-            if (!input_trace_data)
+            int32_t bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
+
+            static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen may be inappropriate.");
+            if (bytes_read < (int32_t) sizeof(current_entry))
             {
-                static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen for gcount may be inappropriate.");
-                int32_t bytes_read = (int32_t) input_trace_data.gcount();
-                if (input_trace_data.gcount() != 0)
+                if (bytes_read != 0)
                 {
                     printf("ERROR: only able to read %d bytes???\n", bytes_read);
                 }
+                // TODO check error is eof
                 break;
             }
 
@@ -171,12 +174,13 @@ int main(int argc, char * argv[])
 
         print_stats(&global_stats);
 
-        // NOTE just being explicit, the destructors would probably do this anyway
-        boost::iostreams::close(input_trace_data);
+        gzclose(input_trace_file);
 
     }
     else if (argc == 3) /* for removing drcachesim trace header/footer (mistakenly left in) */
     {
+        // TODO switch to using plain zlib here as well
+
         char * input_filename = argv[1];
         char * output_filename = argv[2];
 
