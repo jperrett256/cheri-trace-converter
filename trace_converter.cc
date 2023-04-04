@@ -5,17 +5,11 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <assert.h>
 #include <zlib.h>
 
-#include <iostream>
-#include <fstream>
 #include <unordered_map>
 #include <unordered_set>
-
-// #include <boost/filesystem.hpp>
-#include <boost/iostreams/filter/gzip.hpp>
-#include <boost/iostreams/device/file_descriptor.hpp>
-#include <boost/iostreams/filtering_stream.hpp>
 
 
 typedef struct stats_t stats_t;
@@ -155,17 +149,16 @@ int main(int argc, char * argv[])
         while (true)
         {
             tag_tracing_entry_t current_entry = {0};
-
             int32_t bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
 
             static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen may be inappropriate.");
             if (bytes_read < (int32_t) sizeof(current_entry))
             {
+                assert(bytes_read >= 0); // TODO call gzerror?
                 if (bytes_read != 0)
                 {
                     printf("ERROR: only able to read %d bytes???\n", bytes_read);
                 }
-                // TODO check error is eof
                 break;
             }
 
@@ -190,14 +183,11 @@ int main(int argc, char * argv[])
             quit();
         }
 
-        boost::iostreams::filtering_istream input_trace_data;
-        boost::iostreams::filtering_ostream output_trace_data;
+        gzFile input_trace_file = gzopen(input_filename, "rb");
+        assert(input_trace_file);
 
-        input_trace_data.push(boost::iostreams::gzip_decompressor());
-        input_trace_data.push(boost::iostreams::file_descriptor_source(input_filename));
-
-        output_trace_data.push(boost::iostreams::gzip_compressor());
-        output_trace_data.push(boost::iostreams::file_descriptor_sink(output_filename));
+        gzFile output_trace_file = gzopen(output_filename, "wb");
+        assert(output_trace_file);
 
         std::unordered_map<uint64_t, uint64_t> page_table;
         std::unordered_set<uint64_t> dbg_pages_changed_mapping;
@@ -211,13 +201,13 @@ int main(int argc, char * argv[])
         while (true)
         {
             tag_tracing_entry_t current_entry = {0};
-            input_trace_data.read((char *) &current_entry, sizeof(current_entry));
+            int32_t bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
 
-            if (!input_trace_data)
+            static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen may be inappropriate.");
+            if (bytes_read < (int32_t) sizeof(current_entry))
             {
-                static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen for gcount may be inappropriate.");
-                int32_t bytes_read = (int32_t) input_trace_data.gcount();
-                if (input_trace_data.gcount() != 0)
+                assert(bytes_read >= 0); // TODO call gzerror?
+                if (bytes_read != 0)
                 {
                     printf("ERROR: only able to read %d bytes???\n", bytes_read);
                 }
@@ -245,8 +235,8 @@ int main(int argc, char * argv[])
                         printf("WARNING: page table mapping changed at instruction %lu.\n",
                             global_stats_before.num_instructions);
                         printf(
-                            "vaddr: " TARGET_FMT_lx ", old paddr page: " TARGET_FMT_lx
-                            ", new paddr page: " TARGET_FMT_lx ", type: %s\n",
+                            "vaddr: " FMT_ADDR ", old paddr page: " FMT_ADDR
+                            ", new paddr page: " FMT_ADDR ", type: %s\n",
                             vaddr, paddr_page, get_page_start(paddr), get_type_string(current_entry.type));
                     }
                     // assert(paddr_page == get_page_start(paddr));
@@ -263,7 +253,7 @@ int main(int argc, char * argv[])
                     assert(paddr_page);
 
                     current_entry.paddr = paddr_page + (vaddr - get_page_start(vaddr));
-                    // printf("vaddr is: " TARGET_FMT_lx ", set paddr to: " TARGET_FMT_lx "\n",
+                    // printf("vaddr is: " FMT_ADDR ", set paddr to: " FMT_ADDR "\n",
                     //     current_entry.vaddr, current_entry.paddr);
                 }
                 else
@@ -273,7 +263,7 @@ int main(int argc, char * argv[])
                 }
             }
 
-            output_trace_data.write((char *) &current_entry, sizeof(tag_tracing_entry_t));
+            gzwrite(output_trace_file, &current_entry, sizeof(current_entry));
             update_stats(&global_stats_after, current_entry);
         }
 
@@ -292,8 +282,8 @@ int main(int argc, char * argv[])
         printf("Pages without paddr mappings: %lu\n", (uint64_t) dbg_pages_without_mapping.size());
 
         // NOTE just being explicit, the destructors would probably do this anyway
-        boost::iostreams::close(input_trace_data);
-        boost::iostreams::close(output_trace_data);
+        gzclose(input_trace_file);
+        gzclose(output_trace_file);
     }
     else
     {

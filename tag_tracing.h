@@ -11,9 +11,7 @@
 #define EXTERN_C_END
 #endif
 
-#ifndef TARGET_FMT_lx
-#define TARGET_FMT_lx "%016" PRIx64
-#endif
+#define FMT_ADDR "%016" PRIx64
 
 // #define TAG_TRACING_DBG_LOG
 
