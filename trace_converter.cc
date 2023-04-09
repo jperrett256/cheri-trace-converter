@@ -11,6 +11,14 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#define STB_SPRINTF_IMPLEMENTATION
+#include "stb_sprintf.h"
+#undef STB_SPRINTF_IMPLEMENTATION
+
+#define JDP_IMPLEMENTATION
+#include "jdp.h"
+#undef JDP_IMPLEMENTATION
+
 
 typedef struct stats_t stats_t;
 struct stats_t
@@ -57,21 +65,21 @@ void update_stats(stats_t * stats, tag_tracing_entry_t entry)
             stats->num_STOREs++;
 
             if (!entry.paddr) stats->num_STOREs_no_paddr++;
-            assert(entry.tag_value == TAG_TRACING_TAG_CLEARED);
+            assert(entry.tag == TAG_TRACING_TAG_CLEARED);
         } break;
         case TAG_TRACING_TYPE_CLOAD:
         {
             stats->num_CLOADs++;
 
             if (!entry.paddr) stats->num_CLOADs_no_paddr++;
-            if (entry.tag_value == TAG_TRACING_TAG_UNKNOWN) stats->num_CLOADs_no_tag++;
+            if (entry.tag == TAG_TRACING_TAG_UNKNOWN) stats->num_CLOADs_no_tag++;
         } break;
         case TAG_TRACING_TYPE_CSTORE:
         {
             stats->num_CSTOREs++;
 
             if (!entry.paddr) stats->num_CSTOREs_no_paddr++;
-            if (entry.tag_value == TAG_TRACING_TAG_UNKNOWN) stats->num_CSTOREs_no_tag++;
+            if (entry.tag == TAG_TRACING_TAG_UNKNOWN) stats->num_CSTOREs_no_tag++;
         } break;
         default: assert(!"Impossible.");
     }
@@ -133,215 +141,245 @@ uint64_t get_page_start(uint64_t addr)
     return addr & ~((1 << 12) - 1);
 }
 
-int main(int argc, char * argv[])
+#define COMMAND_HANDLER_ARGS arena_t * arena, char * exe_name, char * cmd_name, int num_args, char ** args
+
+void tracesim_get_info(COMMAND_HANDLER_ARGS)
 {
-    if (argc == 2) /* just reads and prints statistics */
+    (void) arena; // TODO
+
+    if (num_args != 1)
     {
-        char * input_filename = argv[1];
-
-        gzFile input_trace_file = gzopen(input_filename, "rb");
-        assert(input_trace_file);
-
-        // TODO tune buffer size with gzbuffer? manual buffering?
-
-        stats_t global_stats = {0};
-
-        while (true)
-        {
-            tag_tracing_entry_t current_entry = {0};
-            int32_t bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
-
-            static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen may be inappropriate.");
-            if (bytes_read < (int32_t) sizeof(current_entry))
-            {
-                assert(bytes_read >= 0); // TODO call gzerror?
-                if (bytes_read != 0)
-                {
-                    printf("ERROR: only able to read %d bytes???\n", bytes_read);
-                }
-                break;
-            }
-
-            update_stats(&global_stats, current_entry);
-        }
-
-        print_stats(&global_stats);
-
-        gzclose(input_trace_file);
-
-    }
-    else if (argc == 3) /* for removing drcachesim trace header/footer (mistakenly left in) */
-    {
-        // TODO switch to using plain zlib here as well
-
-        char * input_filename = argv[1];
-        char * output_filename = argv[2];
-
-        if (file_exists(output_filename))
-        {
-            printf("ERROR: Attempted to overwrite existing file \"%s\".\n", output_filename);
-            quit();
-        }
-
-        gzFile input_trace_file = gzopen(input_filename, "rb");
-        assert(input_trace_file);
-
-        gzFile output_trace_file = gzopen(output_filename, "wb");
-        assert(output_trace_file);
-
-        std::unordered_map<uint64_t, uint64_t> page_table;
-        std::unordered_set<uint64_t> dbg_pages_changed_mapping;
-        std::unordered_set<uint64_t> dbg_pages_without_mapping;
-
-        stats_t global_stats_before = {0};
-        stats_t global_stats_after = {0};
-
-        uint64_t dbg_num_addr_mapping_changes = 0;
-
-        while (true)
-        {
-            tag_tracing_entry_t current_entry = {0};
-            int32_t bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
-
-            static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen may be inappropriate.");
-            if (bytes_read < (int32_t) sizeof(current_entry))
-            {
-                assert(bytes_read >= 0); // TODO call gzerror?
-                if (bytes_read != 0)
-                {
-                    printf("ERROR: only able to read %d bytes???\n", bytes_read);
-                }
-                break;
-            }
-
-            update_stats(&global_stats_before, current_entry);
-
-            uint64_t vaddr = current_entry.vaddr;
-            uint64_t paddr = current_entry.paddr;
-            assert(vaddr);
-
-            if (paddr)
-            {
-                auto table_entry = page_table.find(get_page_start(vaddr));
-                if (table_entry != page_table.end())
-                {
-                    uint64_t paddr_page = table_entry->second;
-                    // TODO why is virtual-physical mapping changing during execution (userspace traces)?
-                    if (paddr_page != get_page_start(paddr))
-                    {
-                        dbg_num_addr_mapping_changes++;
-                        dbg_pages_changed_mapping.insert(get_page_start(vaddr));
-
-                        printf("WARNING: page table mapping changed at instruction %lu.\n",
-                            global_stats_before.num_instructions);
-                        printf(
-                            "vaddr: " FMT_ADDR ", old paddr page: " FMT_ADDR
-                            ", new paddr page: " FMT_ADDR ", type: %s\n",
-                            vaddr, paddr_page, get_page_start(paddr), get_type_string(current_entry.type));
-                    }
-                    // assert(paddr_page == get_page_start(paddr));
-                }
-
-                page_table[get_page_start(vaddr)] = get_page_start(paddr);
-            }
-            else
-            {
-                auto table_entry = page_table.find(get_page_start(vaddr));
-                if (table_entry != page_table.end())
-                {
-                    uint64_t paddr_page = table_entry->second;
-                    assert(paddr_page);
-
-                    current_entry.paddr = paddr_page + (vaddr - get_page_start(vaddr));
-                    // printf("vaddr is: " FMT_ADDR ", set paddr to: " FMT_ADDR "\n",
-                    //     current_entry.vaddr, current_entry.paddr);
-                }
-                else
-                {
-                    // NOTE to see how many pages the entries without valid mappings correspond to
-                    dbg_pages_without_mapping.insert(get_page_start(vaddr));
-                }
-            }
-
-            gzwrite(output_trace_file, &current_entry, sizeof(current_entry));
-            update_stats(&global_stats_after, current_entry);
-        }
-
-        printf("\n");
-
-        printf("Input:\n");
-        print_stats(&global_stats_before);
-        printf("\n");
-
-        printf("Output:\n");
-        print_stats(&global_stats_after);
-        printf("\n");
-
-        printf("Mapping changes: %lu\n", dbg_num_addr_mapping_changes);
-        printf("Pages with mapping changes: %lu\n", (uint64_t) dbg_pages_changed_mapping.size());
-        printf("Pages without paddr mappings: %lu\n", (uint64_t) dbg_pages_without_mapping.size());
-
-        // NOTE just being explicit, the destructors would probably do this anyway
-        gzclose(input_trace_file);
-        gzclose(output_trace_file);
-    }
-    else
-    {
-        printf("Usage: %s <input trace> [<output trace>]\n", argv[0]);
+        printf("Usage: %s %s <trace file>\n", exe_name, cmd_name);
         quit();
     }
 
-    // TODO use a map to store virtual page addresses
-    // writes change mapping, reads read from mapping
-    // should make distinction between:
-    //  - reads for which there is no mapping (never written to same page)
-    //  - writes without tag info to provide mapping (do we assume that mapping doesn't change over course of program?)
+    char * input_filename = args[0];
 
-    // NOTE this mapping could be quite large for programs that use a lot of memory
-    // An alternative, if we need to do two passes anyway (e.g. for tag patching reasons):
-    // it may end up being better to create a map of the entries that need their tag value/paddr patched up on the next pass
-    // (might even be able to use one map for it idk)
+    gzFile input_trace_file = gzopen(input_filename, "rb");
+    assert(input_trace_file);
 
-    // TODO tag patching (fixing missing tag info for CSTOREs using later CLOADs)
+    // TODO tune buffer size with gzbuffer? manual buffering?
 
+    stats_t global_stats = {0};
 
-    // {
-    //     // drcachesim needs a header in the file, so we create it here
-    //     trace_entry_t header{ .type = TRACE_TYPE_HEADER,
-    //                           .size = 0,
-    //                           .addr = TRACE_ENTRY_VERSION };
-    //     DynamorioTraceInterceptor::mem_logfile.write((char *)&header,
-    //                                                  sizeof(header));
+    while (true)
+    {
+        tag_tracing_entry_t current_entry = {0};
+        int32_t bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
 
-    //     // dub thread and pid as we only have one process one thread for now
-    //     trace_entry_t thread{ .type = TRACE_TYPE_THREAD, .size = 4, .addr = 1 };
-    //     trace_entry_t pid{ .type = TRACE_TYPE_PID, .size = 4, .addr = 1 };
+        static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen may be inappropriate.");
+        if (bytes_read < (int32_t) sizeof(current_entry))
+        {
+            assert(bytes_read >= 0); // TODO call gzerror?
+            if (bytes_read != 0)
+            {
+                printf("ERROR: only able to read %d bytes???\n", bytes_read);
+            }
+            break;
+        }
 
-    //     // dub timestamp and cpuid
-    //     trace_entry_t timestamp{ .type = TRACE_TYPE_MARKER,
-    //                              .size = TRACE_MARKER_TYPE_TIMESTAMP,
-    //                              .addr = 0 };
-    //     trace_entry_t cpuid{ .type = TRACE_TYPE_MARKER,
-    //                          .size = TRACE_MARKER_TYPE_CPU_ID,
-    //                          .addr = 0 };
+        update_stats(&global_stats, current_entry);
+    }
 
-    //     DynamorioTraceInterceptor::mem_logfile.write((char *)&thread,
-    //                                                  sizeof(thread));
-    //     DynamorioTraceInterceptor::mem_logfile.write((char *)&pid, sizeof(pid));
-    //     DynamorioTraceInterceptor::mem_logfile.write((char *)&timestamp,
-    //                                                  sizeof(timestamp));
-    //     DynamorioTraceInterceptor::mem_logfile.write((char *)&cpuid,
-    //                                                  sizeof(cpuid));
+    print_stats(&global_stats);
+
+    gzclose(input_trace_file);
+}
 
 
-    //     // add footer to tracing file
-    //     trace_entry_t footer;
-    //     footer.type = TRACE_TYPE_FOOTER;
-    //     footer.size = 0;
-    //     footer.addr = 0;
-    //     DynamorioTraceInterceptor::mem_logfile.write((char *)&footer,
-    //                                                  sizeof(footer));
-    // }
+void tracesim_patch_paddrs(COMMAND_HANDLER_ARGS)
+{
+    if (num_args != 2)
+    {
+        printf("Usage: %s %s <input trace file> <output trace file>\n", exe_name, cmd_name);
+        quit();
+    }
+
+    char * input_filename = args[0];
+    char * output_filename = args[1];
+
+    if (file_exists(output_filename))
+    {
+        printf("ERROR: Attempted to overwrite existing file \"%s\".\n", output_filename);
+        quit();
+    }
+
+    gzFile input_trace_file = gzopen(input_filename, "rb");
+    assert(input_trace_file);
+
+    gzFile output_trace_file = gzopen(output_filename, "wb");
+    assert(output_trace_file);
+
+    std::unordered_map<uint64_t, uint64_t> page_table;
+    std::unordered_set<uint64_t> dbg_pages_changed_mapping;
+    std::unordered_set<uint64_t> dbg_pages_without_mapping;
+
+    stats_t global_stats_before = {0};
+    stats_t global_stats_after = {0};
+
+    uint64_t dbg_num_addr_mapping_changes = 0;
+
+    while (true)
+    {
+        tag_tracing_entry_t current_entry = {0};
+        int32_t bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
+
+        static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen may be inappropriate.");
+        if (bytes_read < (int32_t) sizeof(current_entry))
+        {
+            assert(bytes_read >= 0); // TODO call gzerror?
+            if (bytes_read != 0)
+            {
+                printf("ERROR: only able to read %d bytes???\n", bytes_read);
+            }
+            break;
+        }
+
+        update_stats(&global_stats_before, current_entry);
+
+        uint64_t vaddr = current_entry.vaddr;
+        uint64_t paddr = current_entry.paddr;
+        assert(vaddr);
+
+        if (paddr)
+        {
+            auto table_entry = page_table.find(get_page_start(vaddr));
+            if (table_entry != page_table.end())
+            {
+                uint64_t paddr_page = table_entry->second;
+                // TODO why is virtual-physical mapping changing during execution (userspace traces)?
+                if (paddr_page != get_page_start(paddr))
+                {
+                    dbg_num_addr_mapping_changes++;
+                    dbg_pages_changed_mapping.insert(get_page_start(vaddr));
+
+                    // TODO seems that some instruction pages are being swapped in and out repeatedly
+                    // printf("WARNING: page table mapping changed at instruction %lu.\n",
+                    //     global_stats_before.num_instructions);
+                    // printf(
+                    //     "vaddr: " FMT_ADDR ", old paddr page: " FMT_ADDR
+                    //     ", new paddr page: " FMT_ADDR ", type: %s\n",
+                    //     vaddr, paddr_page, get_page_start(paddr), get_type_string(current_entry.type));
+                }
+                // assert(paddr_page == get_page_start(paddr));
+            }
+
+            page_table[get_page_start(vaddr)] = get_page_start(paddr);
+        }
+        else
+        {
+            auto table_entry = page_table.find(get_page_start(vaddr));
+            if (table_entry != page_table.end())
+            {
+                uint64_t paddr_page = table_entry->second;
+                assert(paddr_page);
+
+                current_entry.paddr = paddr_page + (vaddr - get_page_start(vaddr));
+                // printf("vaddr is: " FMT_ADDR ", set paddr to: " FMT_ADDR "\n",
+                //     current_entry.vaddr, current_entry.paddr);
+            }
+            else
+            {
+                // NOTE to see how many pages the entries without valid mappings correspond to
+                dbg_pages_without_mapping.insert(get_page_start(vaddr));
+            }
+        }
+
+        gzwrite(output_trace_file, &current_entry, sizeof(current_entry));
+        update_stats(&global_stats_after, current_entry);
+    }
+
+    printf("\n");
+
+    printf("Input:\n");
+    print_stats(&global_stats_before);
+    printf("\n");
+
+    printf("Output:\n");
+    print_stats(&global_stats_after);
+    printf("\n");
+
+    printf("Mapping changes: %lu\n", dbg_num_addr_mapping_changes);
+    printf("Pages with mapping changes: %lu\n", (uint64_t) dbg_pages_changed_mapping.size());
+    printf("Pages without paddr mappings: %lu\n", (uint64_t) dbg_pages_without_mapping.size());
+
+    gzclose(input_trace_file);
+    gzclose(output_trace_file);
+}
+
+
+typedef struct command_t command_t;
+struct command_t
+{
+    string_t name;
+    void (*handler)(COMMAND_HANDLER_ARGS);
+};
+
+void print_commands_and_quit(char * exe_name, command_t * commands, u32 num_commands)
+{
+    printf("Usage: %s <command> [<argument1> ...]\n", exe_name);
+    printf("Available commands:\n");
+    for (i64 i = 0; i < num_commands; i++)
+    {
+        printf("    %.*s\n", string_varg(commands[i].name));
+    }
+    quit();
+}
+
+int main(int argc, char * argv[])
+{
+    arena_t arena = arena_alloc(MEGABYTES(64));
+
+    command_t commands[] =
+    {
+        {
+            string_lit("get-info"),
+            tracesim_get_info
+        },
+        {
+            string_lit("patch-paddrs"),
+            tracesim_patch_paddrs
+        },
+        {
+            string_lit("convert"), /* TODO eventually call "convert" and just use file extension */
+            NULL // TODO
+        },
+        {
+            string_lit("simulate"),
+            NULL // TODO
+        }
+    };
+
+    assert(array_count(commands) <= UINT32_MAX);
+    u32 num_commands = (u32) array_count(commands);
+
+    if (argc < 2)
+    {
+        print_commands_and_quit(argv[0], commands, num_commands);
+    }
+
+    string_t command = string_from_cstr(argv[1]);
+    i64 match_index = -1;
+    for (i64 i = 0; i < num_commands; i++)
+    {
+        if (string_match(commands[i].name, command))
+        {
+            match_index = i;
+            break;
+        }
+    }
+
+    if (match_index >= 0)
+    {
+        assert(match_index < num_commands);
+        commands[match_index].handler(&arena, argv[0], argv[1], argc - 2, &argv[2]);
+    }
+    else
+    {
+        print_commands_and_quit(argv[0], commands, num_commands);
+    }
+
+    arena_free(&arena);
 
     return 0;
 }

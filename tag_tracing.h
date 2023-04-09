@@ -40,21 +40,8 @@ typedef struct tag_tracing_entry_t tag_tracing_entry_t;
 struct tag_tracing_entry_t
 {
     uint8_t type;
-    uint8_t tag_value; // only applicable for CSTOREs/STOREs
+    uint8_t tag; // ignore for LOADs
     uint16_t size;
-    uintptr_t vaddr; // TODO may only need to keep for CSTORE/STOREs? (Check we don't need the CLOADs to reconstruct mapping)
+    uintptr_t vaddr; // only for reconstructing the minority of missing paddrs
     uintptr_t paddr;
 };
-
-EXTERN_C
-extern FILE * tag_tracing_dbg_logfile;
-
-void tag_tracing_init(const char * text_log_filename);
-void tag_tracing_quit(void);
-
-void tag_tracing_end_instr(void);
-void tag_tracing_cap_read(uintptr_t vaddr, uintptr_t haddr);
-void tag_tracing_cap_write(uint8_t tag_value, uintptr_t vaddr, uintptr_t haddr);
-void tag_tracing_emit_entry(uint8_t type, uint16_t size, uintptr_t vaddr);
-
-EXTERN_C_END

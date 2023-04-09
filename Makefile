@@ -6,7 +6,9 @@ SRC_FILES := trace_converter.cc
 # OBJ_FILES := $(patsubst %.cc,$(BUILD_DIR)/%.o,$(SRC_FILES))
 EXE_FILE := trace_converter
 
-COMPILER_FLAGS_COMMON := -std=gnu++11 -Wall -o $(BUILD_DIR)/$(EXE_FILE)
+INC_DIR := inc
+
+COMPILER_FLAGS_COMMON := -std=gnu++11 -Wall -o $(BUILD_DIR)/$(EXE_FILE) -I$(INC_DIR)/
 
 COMPILER_FLAGS_DEBUG := $(COMPILER_FLAGS_COMMON) -g
 COMPILER_FLAGS_RELEASE := $(COMPILER_FLAGS_COMMON) -O3
