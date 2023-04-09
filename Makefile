@@ -2,8 +2,7 @@ CXX := g++
 
 BUILD_DIR := build
 
-SRC_FILES := trace_converter.cc
-# OBJ_FILES := $(patsubst %.cc,$(BUILD_DIR)/%.o,$(SRC_FILES))
+SRC_FILES := src/main.cc src/common.cc src/handlers.cc
 EXE_FILE := trace_converter
 
 INC_DIR := inc

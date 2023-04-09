@@ -4,7 +4,6 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <assert.h>
-#include "stb_sprintf.h"
 
 #if defined(__gnu_linux__)
  #define JDP_OS_LINUX 1
@@ -44,6 +43,7 @@ typedef double      f64;
 
 #if JDP_OS_WINDOWS
  #include <windows.h>
+ #include "stb_sprintf.h"
 #elif JDP_OS_LINUX
  #include <sys/mman.h>
 #endif
@@ -93,6 +93,7 @@ void arena_free(arena_t * arena);
 void * arena_push(arena_t * arena, u64 amount);
 #define arena_push_array(arena, type, count) ((type *) arena_push(arena, sizeof(type) * (count)))
 
+#endif /* JDP_INCLUDE */
 
 #ifdef JDP_IMPLEMENTATION
 
@@ -155,7 +156,7 @@ bool string_match_prefix(string_t s, string_t prefix)
 }
 
 
-# if JDP_OS_WINDOWS
+#if JDP_OS_WINDOWS
 static void * jdp_mem_reserve(u64 size)
 {
     return VirtualAlloc(NULL, size, MEM_RESERVE, PAGE_READWRITE);
@@ -172,7 +173,7 @@ static void jdp_mem_release(void * ptr, u64 size)
     VirtualFree(ptr, 0, MEM_RELEASE)
 
 }
-# elif JDP_OS_LINUX
+#elif JDP_OS_LINUX
 static void * jdp_mem_reserve(u64 size)
 {
     void * result = mmap(0, size, PROT_NONE, MAP_PRIVATE |  MAP_ANONYMOUS, -1, 0);
@@ -189,7 +190,7 @@ static void jdp_mem_release(void * ptr, u64 size)
 {
     munmap(ptr, size);
 }
-# endif
+#endif
 
 arena_t arena_alloc(u64 size)
 {
@@ -236,4 +237,3 @@ void * arena_push(arena_t * arena, u64 amount)
 }
 
 #endif /* JDP_IMPLEMENTATION */
-#endif /* JDP_INCLUDE */
