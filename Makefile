@@ -3,7 +3,7 @@ CXX := g++
 BUILD_DIR := build
 
 SRC_FILES := src/main.cc src/common.cc src/handlers.cc
-EXE_FILE := trace_converter
+EXE_FILE := tracesim
 
 INC_DIR := inc
 
@@ -25,3 +25,6 @@ release: build_dir
 
 build_dir:
 	@mkdir -p $(BUILD_DIR)
+
+clean:
+	@rm -rf build

@@ -26,27 +26,42 @@ void print_commands_and_quit(char * exe_name, command_t * commands, u32 num_comm
     quit();
 }
 
+static void handler_missing(COMMAND_HANDLER_ARGS)
+{
+    assert(!"Handler not implemented!");
+}
+
 int main(int argc, char * argv[])
 {
     arena_t arena = arena_alloc(MEGABYTES(64));
 
+    // TODO add help text?
     command_t commands[] =
     {
         {
             string_lit("get-info"),
-            tracesim_get_info
+            trace_get_info
         },
         {
             string_lit("patch-paddrs"),
-            tracesim_patch_paddrs
+            trace_patch_paddrs
+            // TODO if you wanna implement your own hashmap, checking the output of this with previous results would be a good way to test it
         },
         {
             string_lit("convert"), /* TODO eventually call "convert" and just use file extension */
-            NULL // TODO
+            handler_missing // TODO
+        },
+        {
+            string_lit("convert-drcachesim"),
+            handler_missing // TODO
+        },
+        {
+            string_lit("get-initial-tags"),
+            trace_get_initial_tags
         },
         {
             string_lit("simulate"),
-            NULL // TODO
+            handler_missing // TODO
         }
     };
 

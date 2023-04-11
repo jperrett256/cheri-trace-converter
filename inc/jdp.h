@@ -35,8 +35,9 @@ typedef double      f64;
 #define GIGABYTES(x)    (MEGABYTES(x)*1024LL)
 #define TERABYTES(x)    (GIGABYTES(x)*1024LL)
 
-#define array_count(a)      (sizeof(a) / sizeof((a)[0]))
-#define align_pow_2(x, b)   (((x) + ((b) - 1)) & (~((b) - 1)))
+#define array_count(a)              (sizeof(a) / sizeof((a)[0]))
+#define align_floor_pow_2(x, b)     ((x) & (~((b) - 1)))
+#define align_ceil_pow_2(x, b)      (((x) + ((b) - 1)) & (~((b) - 1)))
 
 #define ARENA_COMMIT_SIZE       KILOBYTES(64)
 #define COMMON_TEMP_BUF_LEN    	KILOBYTES(8)
@@ -215,8 +216,8 @@ void arena_free(arena_t * arena)
 void * arena_push(arena_t * arena, u64 amount)
 {
     u64 old_pos = arena->pos;
-    assert(old_pos == align_pow_2(old_pos, 8));
-    u64 new_pos = align_pow_2(old_pos + amount, 8);
+    assert(old_pos == align_ceil_pow_2(old_pos, 8));
+    u64 new_pos = align_ceil_pow_2(old_pos + amount, 8);
     assert(new_pos >= old_pos);
 
     if (new_pos > arena->reserved)
