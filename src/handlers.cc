@@ -14,35 +14,34 @@
 #define MEMORY_SIZE GIGABYTES(2)
 #define BASE_PADDR 0x80000000
 
-
-typedef struct stats_t stats_t;
-struct stats_t
-{
-    uint64_t num_instructions;
-    uint64_t num_instructions_no_paddr;
-
-    uint64_t num_mem_accesses;
-
-    uint64_t num_LOADs;
-    uint64_t num_STOREs;
-    uint64_t num_CLOADs;
-    uint64_t num_CSTOREs;
-
-    uint64_t num_LOADs_no_paddr;
-    uint64_t num_STOREs_no_paddr;
-    uint64_t num_CLOADs_no_paddr;
-    uint64_t num_CSTOREs_no_paddr;
-
-    uint64_t num_paddrs_invalid; // NOTE includes missing
-};
-
-// TODO use this further down as well
 static bool check_paddr_valid(u64 paddr)
 {
     return paddr >= BASE_PADDR && paddr < BASE_PADDR + MEMORY_SIZE;
 }
 
-static void update_stats(stats_t * stats, trace_entry_t entry)
+
+typedef struct trace_stats_t trace_stats_t;
+struct trace_stats_t
+{
+    u64 num_instructions;
+    u64 num_instructions_no_paddr;
+
+    u64 num_mem_accesses;
+
+    u64 num_LOADs;
+    u64 num_STOREs;
+    u64 num_CLOADs;
+    u64 num_CSTOREs;
+
+    u64 num_LOADs_no_paddr;
+    u64 num_STOREs_no_paddr;
+    u64 num_CLOADs_no_paddr;
+    u64 num_CSTOREs_no_paddr;
+
+    u64 num_paddrs_invalid; // NOTE includes missing paddrs
+};
+
+static void update_trace_stats(trace_stats_t * stats, trace_entry_t entry)
 {
     if (entry.type != TRACE_ENTRY_TYPE_INSTR) stats->num_mem_accesses++;
     if (!check_paddr_valid(entry.paddr)) stats->num_paddrs_invalid++;
@@ -86,7 +85,7 @@ static void update_stats(stats_t * stats, trace_entry_t entry)
     }
 }
 
-static void print_stats(stats_t * stats)
+static void print_trace_stats(trace_stats_t * stats)
 {
     printf("Statistics:\n");
     printf("\tInstructions: %lu\n", stats->num_instructions);
@@ -105,7 +104,7 @@ static void print_stats(stats_t * stats)
     printf("\tInvalid paddrs: %lu\n", stats->num_paddrs_invalid);
 }
 
-// static const char * get_type_string(uint8_t type)
+// static const char * get_type_string(u8 type)
 // {
 //     switch (type)
 //     {
@@ -130,7 +129,7 @@ static bool file_exists(char * filename)
     return fd != NULL;
 }
 
-static uint64_t get_page_start(uint64_t addr)
+static u64 get_page_start(u64 addr)
 {
     return addr & ~((1 << 12) - 1);
 }
@@ -153,15 +152,15 @@ void trace_get_info(COMMAND_HANDLER_ARGS)
 
     // TODO tune buffer size with gzbuffer? manual buffering?
 
-    stats_t global_stats = {0};
+    trace_stats_t global_stats = {0};
 
     while (true)
     {
         trace_entry_t current_entry = {0};
-        int32_t bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
+        i32 bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
 
         static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen may be inappropriate.");
-        if (bytes_read < (int32_t) sizeof(current_entry))
+        if (bytes_read < (i32) sizeof(current_entry))
         {
             assert(bytes_read >= 0); // TODO call gzerror?
             if (bytes_read != 0)
@@ -171,10 +170,10 @@ void trace_get_info(COMMAND_HANDLER_ARGS)
             break;
         }
 
-        update_stats(&global_stats, current_entry);
+        update_trace_stats(&global_stats, current_entry);
     }
 
-    print_stats(&global_stats);
+    print_trace_stats(&global_stats);
 
     gzclose(input_trace_file);
 }
@@ -203,22 +202,24 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
     gzFile output_trace_file = gzopen(output_filename, "wb");
     assert(output_trace_file);
 
-    std::unordered_map<uint64_t, uint64_t> page_table;
-    std::unordered_set<uint64_t> dbg_pages_changed_mapping;
-    std::unordered_set<uint64_t> dbg_pages_without_mapping;
+    std::unordered_map<u64, u64> page_table;
+    std::unordered_set<u64> dbg_pages_changed_mapping;
+    std::unordered_set<u64> dbg_pages_without_mapping;
 
-    stats_t global_stats_before = {0};
-    stats_t global_stats_after = {0};
+    trace_stats_t global_stats_before = {0};
+    trace_stats_t global_stats_after = {0};
 
-    uint64_t dbg_num_addr_mapping_changes = 0;
+    u64 dbg_num_addr_mapping_changes = 0;
+
+    // TODO could output compressed traces that omit vaddrs? maybe we should have a header with some metadata in it
 
     while (true)
     {
         trace_entry_t current_entry = {0};
-        int32_t bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
+        i32 bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
 
         static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen may be inappropriate.");
-        if (bytes_read < (int32_t) sizeof(current_entry))
+        if (bytes_read < (i32) sizeof(current_entry))
         {
             assert(bytes_read >= 0); // TODO call gzerror?
             if (bytes_read != 0)
@@ -228,10 +229,10 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
             break;
         }
 
-        update_stats(&global_stats_before, current_entry);
+        update_trace_stats(&global_stats_before, current_entry);
 
-        uint64_t vaddr = current_entry.vaddr;
-        uint64_t paddr = current_entry.paddr;
+        u64 vaddr = current_entry.vaddr;
+        u64 paddr = current_entry.paddr;
         assert(vaddr);
 
         if (check_paddr_valid(paddr))
@@ -239,7 +240,7 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
             auto table_entry = page_table.find(get_page_start(vaddr));
             if (table_entry != page_table.end())
             {
-                uint64_t paddr_page = table_entry->second;
+                u64 paddr_page = table_entry->second;
                 // TODO why is virtual-physical mapping changing during execution (userspace traces)?
                 if (paddr_page != get_page_start(paddr))
                 {
@@ -264,7 +265,7 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
             auto table_entry = page_table.find(get_page_start(vaddr));
             if (table_entry != page_table.end())
             {
-                uint64_t paddr_page = table_entry->second;
+                u64 paddr_page = table_entry->second;
                 assert(paddr_page);
 
                 current_entry.paddr = paddr_page + (vaddr - get_page_start(vaddr));
@@ -279,22 +280,22 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
         }
 
         gzwrite(output_trace_file, &current_entry, sizeof(current_entry));
-        update_stats(&global_stats_after, current_entry);
+        update_trace_stats(&global_stats_after, current_entry);
     }
 
     printf("\n");
 
     printf("Input:\n");
-    print_stats(&global_stats_before);
+    print_trace_stats(&global_stats_before);
     printf("\n");
 
     printf("Output:\n");
-    print_stats(&global_stats_after);
+    print_trace_stats(&global_stats_after);
     printf("\n");
 
     printf("Mapping changes: %lu\n", dbg_num_addr_mapping_changes);
-    printf("Pages with mapping changes: %lu\n", (uint64_t) dbg_pages_changed_mapping.size());
-    printf("Pages without paddr mappings: %lu\n", (uint64_t) dbg_pages_without_mapping.size());
+    printf("Pages with mapping changes: %lu\n", (u64) dbg_pages_changed_mapping.size());
+    printf("Pages without paddr mappings: %lu\n", (u64) dbg_pages_without_mapping.size());
 
     gzclose(input_trace_file);
     gzclose(output_trace_file);
@@ -346,32 +347,35 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
     u8 * initial_tag_state = arena_push_array(arena, u8, tag_table_size);
     for (i64 i = 0; i < tag_table_size; i++) initial_tag_state[i] = 0;
 
+    /* TODO
+     * Need to test if the default tag state affects anything (if 0, 1 or random has any affect).
+     *  - Worth noting that memory that is not accessed, but within the same page as memory that is, likely has 0 for its tag.
+     *    (Since pages are zero-initialised.)
+     *      - If you account for this, and having 1s vs 0s still has an effect (due to the coverage of a root table cache line),
+     *        that would imply that other programs can affect the caching of this program. Side-channel concerns?
+     */
+
     std::unordered_set<u64> initialized_tags; // all keys should be CAP_SIZE_BITS aligned
     std::unordered_set<u64> dbg_modified_tags; // keep track of which tags do not match initial tag state
 
     std::unordered_set<u64> initialized_tags_INSTRs;
     std::unordered_set<u64> initialized_tags_LOADs;
-    std::unordered_set<u64> initialized_tags_STOREs;
     std::unordered_set<u64> initialized_tags_CLOADs;
-    std::unordered_set<u64> initialized_tags_CSTOREs;
 
-    i64 dbg_idx = 0;
     i64 dbg_paddrs_missing = 0;
     i64 dbg_paddrs_invalid = 0;
 
     i64 dbg_assumed_tag_incorrect_INSTRs = 0;
     i64 dbg_assumed_tag_incorrect_LOADs = 0;
-    i64 dbg_assumed_tag_incorrect_STOREs = 0;
     i64 dbg_assumed_tag_incorrect_CLOADs = 0;
-    i64 dbg_assumed_tag_incorrect_CSTOREs = 0;
 
     while (true)
     {
         trace_entry_t current_entry = {0};
-        int32_t bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
+        i32 bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
 
         static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen may be inappropriate.");
-        if (bytes_read < (int32_t) sizeof(current_entry))
+        if (bytes_read < (i32) sizeof(current_entry))
         {
             assert(bytes_read >= 0); // TODO call gzerror?
             if (bytes_read != 0)
@@ -381,12 +385,7 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
             break;
         }
 
-        if (dbg_idx % 10000)
-        {
-            printf("%ld entries processed.\n", dbg_idx);
-        }
-
-        if (current_entry.paddr < BASE_PADDR || current_entry.paddr >= BASE_PADDR + MEMORY_SIZE)
+        if (!check_paddr_valid(current_entry.paddr))
         {
             if (current_entry.paddr == 0) dbg_paddrs_missing++;
             else dbg_paddrs_invalid++;
@@ -394,21 +393,15 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
             continue;
         }
 
+        assert(current_entry.tag == 0 || current_entry.tag == 1);
+
         u64 start_addr = align_floor_pow_2(current_entry.paddr, CAP_SIZE_BYTES);
         u64 end_addr = align_ceil_pow_2(current_entry.paddr + current_entry.size, CAP_SIZE_BYTES);
         assert(start_addr < end_addr);
 
-        // printf("start_addr: %lu, end_addr: %lu\n", start_addr, end_addr);
-
         for (u64 paddr = start_addr; paddr < end_addr; paddr += CAP_SIZE_BYTES)
         {
-            // if (!(paddr >= BASE_PADDR && paddr < BASE_PADDR + MEMORY_SIZE))
-            // {
-            //     printf("paddr: " FMT_ADDR ", current_entry.paddr: " FMT_ADDR "\n", paddr, current_entry.paddr);
-            //     printf("BASE_PADDR: " FMT_ADDR ", BASE_PADDR + MEMORY_SIZE: " FMT_ADDR "\n", BASE_PADDR, BASE_PADDR + MEMORY_SIZE);
-            //     fflush(stdout);
-            // }
-            assert(paddr >= BASE_PADDR && paddr < BASE_PADDR + MEMORY_SIZE);
+            assert(check_paddr_valid(paddr));
             u64 mem_offset = paddr - BASE_PADDR;
 
             i64 tag_table_idx = mem_offset / CAP_SIZE_BYTES / 8;
@@ -429,15 +422,14 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
                     case TRACE_ENTRY_TYPE_LOAD:
                     {
                         initialized_tags_LOADs.insert(paddr);
-                        assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) == 0);
                         // NOTE assuming tag is 0, leaving as initialised
+                        assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) == 0);
                     } break;
                     case TRACE_ENTRY_TYPE_STORE:
                     {
-                        initialized_tags_STOREs.insert(paddr);
                         dbg_modified_tags.insert(paddr);
+                        // NOTE assuming tag before store is 0, leaving as initialised
                         assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) == 0);
-                        // NOTE assuming tag is 0, leaving as initialised
                     } break;
                     case TRACE_ENTRY_TYPE_CLOAD:
                     {
@@ -452,7 +444,6 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
                     } break;
                     case TRACE_ENTRY_TYPE_CSTORE:
                     {
-                        initialized_tags_CSTOREs.insert(paddr);
                         dbg_modified_tags.insert(paddr);
                         assert(paddr == current_entry.paddr && "Unaligned CSTORE.");
                         // NOTE assuming tag is 1
@@ -476,31 +467,24 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
                 else if (current_entry.type == TRACE_ENTRY_TYPE_CLOAD)
                 {
                     bool was_modified_since_init = dbg_modified_tags.find(paddr) != dbg_modified_tags.end();
-                    // TODO need to check there was no intervening STORE/CSTORE that would make this check invalid
                     if (!was_modified_since_init)
                     {
                         bool recorded_tag_value = (initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) != 0;
                         if (recorded_tag_value != current_entry.tag)
                         {
+                            // NOTE the LOADs are the main one I'm worried about (LOADs followed by a CLOAD reading a 1 for the tag)
+
                             if (initialized_tags_INSTRs.find(paddr) != initialized_tags_INSTRs.end())
                                 dbg_assumed_tag_incorrect_INSTRs++;
                             else if (initialized_tags_LOADs.find(paddr) != initialized_tags_LOADs.end())
                                 dbg_assumed_tag_incorrect_LOADs++;
-                            else if (initialized_tags_STOREs.find(paddr) != initialized_tags_STOREs.end())
-                                dbg_assumed_tag_incorrect_STOREs++;
                             else if (initialized_tags_CLOADs.find(paddr) != initialized_tags_CLOADs.end())
                                 dbg_assumed_tag_incorrect_CLOADs++;
-                            else if (initialized_tags_CSTOREs.find(paddr) != initialized_tags_CSTOREs.end())
-                                dbg_assumed_tag_incorrect_CSTOREs++;
                             else
                                 assert(!"Impossible");
                         }
                     }
                 }
-                // TODO asserts?
-                // (with LOADs, maybe check for following CLOADs that say otherwise?)
-                // (with STOREs, assert folowing CLOADs read 0 for the tag)
-                // (with CSTOREs, assert folowing CLOADs read correct value for the tag)
             }
         }
     }
@@ -509,9 +493,7 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
     printf("Entries with invalid paddrs (skipped): %ld\n", dbg_paddrs_invalid);
     printf("Number of times tags were incorrect (INSTRs): %ld\n", dbg_assumed_tag_incorrect_INSTRs);
     printf("Number of times tags were incorrect (LOADs): %ld\n", dbg_assumed_tag_incorrect_LOADs);
-    printf("Number of times tags were incorrect (STOREs): %ld\n", dbg_assumed_tag_incorrect_STOREs);
     printf("Number of times tags were incorrect (CLOADs): %ld\n", dbg_assumed_tag_incorrect_CLOADs);
-    printf("Number of times tags were incorrect (CSTOREs): %ld\n", dbg_assumed_tag_incorrect_CSTOREs);
 
     gzclose(input_trace_file);
 
@@ -519,7 +501,7 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
     fclose(initial_tags_file);
 
     /* TODO
-     * create 2 MiB buffer of tags, set to zero, that we'll update over time
+     * create 16 MiB buffer of tags, set to zero, that we'll update over time
      * create set that we'll fill with entries indicating whether or not we already have the initial value of a tag or not
      * LOADs/STOREs - assume it was 0 before
      * (with LOADs, maybe check for following CLOADs that say otherwise?)
@@ -537,7 +519,7 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
 // struct cache_line_t
 // {
 //     // TODO fit in 8 bytes? (don't need lowest 12 bits of tag, counter can be 8 bits, can use other 4 bits for tag and any other metadata)
-//     int64_t tag;
+//     u64 tag;
 //     u32 counter;
 //     bool tag;
 //     bool dirty;
@@ -547,7 +529,7 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
 // typedef struct tag_cache_line_t tag_cache_line_t;
 // struct tag_cache_line_t
 // {
-//     int64_t tag;
+//     u64 tag;
 //     u8 data[TAG_CACHE_GF/8];
 //     u32 counter;
 //     bool dirty;
@@ -587,7 +569,7 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
     // TODO another use for this simulator is providing "core dumps", snapshots of the memory contents at runtime to see pointer/tag distribution
 
     /* TODO L1, L2, L3 caches:
-     *  - LOADs pull in full cache lines, presumably this includes the corresponding tag? *QUESTION*
+     *  - LOADs pull in full cache lines, presumably this includes the corresponding tags? *QUESTION*
      *      - We don't know the tags, but can assume they are 0 and check if later there's a corresponding CLOAD with tag value 1 from the same address
      *          - may involve storing some extra bits in cache entries, but should be fine
      *  - Do we want to simulate multicore cache behaviour by playing traces back as though multiple "CPUs" were executing programs? *QUESTION*
