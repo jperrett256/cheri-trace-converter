@@ -2,9 +2,13 @@
 #include "trace.h"
 #include "common.h"
 #include "handlers.h"
+#include "drcachesim.h"
 
 #include <stdio.h>
 #include <zlib.h>
+#include <inttypes.h>
+
+#define FMT_ADDR "%016" PRIx64
 
 // TODO get rid of C++?
 #include <unordered_map>
@@ -23,62 +27,91 @@ static bool check_paddr_valid(u64 paddr)
 typedef struct trace_stats_t trace_stats_t;
 struct trace_stats_t
 {
+    // NOTE invalid paddr counts include missing paddrs
+
+    u64 num_entries;
+    u64 num_entries_no_paddr;
+    u64 num_entries_invalid_paddr;
+
+    u64 num_entries_paddr_matches_vaddr;
+    u64 num_entries_invalid_paddr_matches_vaddr;
+
     u64 num_instructions;
     u64 num_instructions_no_paddr;
+    u64 num_instructions_invalid_paddr;
 
     u64 num_mem_accesses;
 
     u64 num_LOADs;
-    u64 num_STOREs;
-    u64 num_CLOADs;
-    u64 num_CSTOREs;
-
     u64 num_LOADs_no_paddr;
-    u64 num_STOREs_no_paddr;
-    u64 num_CLOADs_no_paddr;
-    u64 num_CSTOREs_no_paddr;
+    u64 num_LOADs_invalid_paddr;
 
-    u64 num_paddrs_invalid; // NOTE includes missing paddrs
+    u64 num_STOREs;
+    u64 num_STOREs_no_paddr;
+    u64 num_STOREs_invalid_paddr;
+
+    u64 num_CLOADs;
+    u64 num_CLOADs_no_paddr;
+    u64 num_CLOADs_invalid_paddr;
+
+    u64 num_CSTOREs;
+    u64 num_CSTOREs_no_paddr;
+    u64 num_CSTOREs_invalid_paddr;
 };
 
-static void update_trace_stats(trace_stats_t * stats, trace_entry_t entry)
+static void update_trace_stats(trace_stats_t * stats, custom_trace_entry_t entry)
 {
-    if (entry.type != TRACE_ENTRY_TYPE_INSTR) stats->num_mem_accesses++;
-    if (!check_paddr_valid(entry.paddr)) stats->num_paddrs_invalid++;
+    stats->num_entries++;
+    if (!entry.paddr) stats->num_entries_no_paddr++;
+    if (!check_paddr_valid(entry.paddr)) stats->num_entries_invalid_paddr++;
+
+    if (entry.vaddr == entry.paddr)
+    {
+        stats->num_entries_paddr_matches_vaddr++;
+        assert(entry.paddr);
+        if (!check_paddr_valid(entry.paddr)) stats->num_entries_invalid_paddr_matches_vaddr++;
+    }
+
+    if (entry.type != CUSTOM_TRACE_TYPE_INSTR) stats->num_mem_accesses++;
 
     switch (entry.type)
     {
-        case TRACE_ENTRY_TYPE_INSTR:
+        case CUSTOM_TRACE_TYPE_INSTR:
         {
             stats->num_instructions++;
 
             if (!entry.paddr) stats->num_instructions_no_paddr++;
+            if (!check_paddr_valid(entry.paddr)) stats->num_instructions_invalid_paddr++;
         } break;
-        case TRACE_ENTRY_TYPE_LOAD:
+        case CUSTOM_TRACE_TYPE_LOAD:
         {
             stats->num_LOADs++;
 
             if (!entry.paddr) stats->num_LOADs_no_paddr++;
+            if (!check_paddr_valid(entry.paddr)) stats->num_LOADs_invalid_paddr++;
         } break;
-        case TRACE_ENTRY_TYPE_STORE:
+        case CUSTOM_TRACE_TYPE_STORE:
         {
             stats->num_STOREs++;
 
             if (!entry.paddr) stats->num_STOREs_no_paddr++;
+            if (!check_paddr_valid(entry.paddr)) stats->num_STOREs_invalid_paddr++;
             assert(entry.tag == 0);
         } break;
-        case TRACE_ENTRY_TYPE_CLOAD:
+        case CUSTOM_TRACE_TYPE_CLOAD:
         {
             stats->num_CLOADs++;
 
             if (!entry.paddr) stats->num_CLOADs_no_paddr++;
+            if (!check_paddr_valid(entry.paddr)) stats->num_CLOADs_invalid_paddr++;
             assert(entry.tag == 0 || entry.tag == 1);
         } break;
-        case TRACE_ENTRY_TYPE_CSTORE:
+        case CUSTOM_TRACE_TYPE_CSTORE:
         {
             stats->num_CSTOREs++;
 
             if (!entry.paddr) stats->num_CSTOREs_no_paddr++;
+            if (!check_paddr_valid(entry.paddr)) stats->num_CSTOREs_invalid_paddr++;
             assert(entry.tag == 0 || entry.tag == 1);
         } break;
         default: assert(!"Impossible.");
@@ -88,38 +121,58 @@ static void update_trace_stats(trace_stats_t * stats, trace_entry_t entry)
 static void print_trace_stats(trace_stats_t * stats)
 {
     printf("Statistics:\n");
+    printf("\tTotal entries: %lu\n", stats->num_entries);
+    printf("\tTotal entries without paddr: %lu\n", stats->num_entries_no_paddr);
+    printf("\tTotal entries with invalid paddr: %lu\n", stats->num_entries_invalid_paddr);
+    printf("\n");
+    printf("\tTotal entries where paddr == vaddr: %ld\n", stats->num_entries_paddr_matches_vaddr);
+    printf("\tTotal entries where invalid paddr == vaddr: %ld\n", stats->num_entries_invalid_paddr_matches_vaddr);
+    printf("\n");
     printf("\tInstructions: %lu\n", stats->num_instructions);
     printf("\tInstructions without paddr: %lu\n", stats->num_instructions_no_paddr);
+    printf("\tInstructions with invalid paddr: %lu\n", stats->num_instructions_invalid_paddr);
+    printf("\n");
     printf("\tTotal memory accesses: %lu\n", stats->num_mem_accesses);
     printf("\n");
     printf("\tLOADs: %lu\n", stats->num_LOADs);
     printf("\tLOADs without paddr: %lu\n", stats->num_LOADs_no_paddr);
+    printf("\tLOADs with invalid paddr: %lu\n", stats->num_LOADs_invalid_paddr);
+    printf("\n");
     printf("\tSTOREs: %lu\n", stats->num_STOREs);
     printf("\tSTOREs without paddr: %lu\n", stats->num_STOREs_no_paddr);
+    printf("\tSTOREs with invalid paddr: %lu\n", stats->num_STOREs_invalid_paddr);
+    printf("\n");
     printf("\tCLOADs: %lu\n", stats->num_CLOADs);
     printf("\tCLOADs without paddr: %lu\n", stats->num_CLOADs_no_paddr);
+    printf("\tCLOADs with invalid paddr: %lu\n", stats->num_CLOADs_invalid_paddr);
+    printf("\n");
     printf("\tCSTOREs: %lu\n", stats->num_CSTOREs);
     printf("\tCSTOREs without paddr: %lu\n", stats->num_CSTOREs_no_paddr);
-    printf("\n");
-    printf("\tInvalid paddrs: %lu\n", stats->num_paddrs_invalid);
+    printf("\tCSTOREs with invalid paddr: %lu\n", stats->num_CSTOREs_invalid_paddr);
 }
 
 // static const char * get_type_string(u8 type)
 // {
 //     switch (type)
 //     {
-//         case TRACE_ENTRY_TYPE_INSTR:
+//         case CUSTOM_TRACE_TYPE_INSTR:
 //             return "INSTR";
-//         case TRACE_ENTRY_TYPE_LOAD:
+//         case CUSTOM_TRACE_TYPE_LOAD:
 //             return "LOAD";
-//         case TRACE_ENTRY_TYPE_STORE:
+//         case CUSTOM_TRACE_TYPE_STORE:
 //             return "STORE";
-//         case TRACE_ENTRY_TYPE_CLOAD:
+//         case CUSTOM_TRACE_TYPE_CLOAD:
 //             return "CLOAD";
-//         case TRACE_ENTRY_TYPE_CSTORE:
+//         case CUSTOM_TRACE_TYPE_CSTORE:
 //             return "CSTORE";
 //         default: assert(!"Impossible.");
 //     }
+// }
+
+// static void debug_print_entry(custom_trace_entry_t entry)
+// {
+//     printf("%s [ vaddr: " FMT_ADDR ", paddr: " FMT_ADDR ", size: %hu ]\n",
+//         get_type_string(entry.type), entry.vaddr, entry.paddr, entry.size);
 // }
 
 static bool file_exists(char * filename)
@@ -127,6 +180,29 @@ static bool file_exists(char * filename)
     FILE * fd = fopen(filename, "rb");
     if (fd) fclose(fd);
     return fd != NULL;
+}
+
+static bool gz_at_eof(int bytes_read, int expected_bytes)
+{
+    if (bytes_read < 0)
+    {
+        printf("ERROR: error reading gzip file.\n");
+        // TODO call gzerror?
+        quit();
+    }
+
+
+    if (bytes_read < expected_bytes)
+    {
+        assert(bytes_read >= 0);
+        if (bytes_read != 0)
+        {
+            printf("ERROR: attempted to read %d bytes, was only able to read %d bytes.\n", expected_bytes, bytes_read);
+        }
+        return true;
+    }
+
+    return false;
 }
 
 static u64 get_page_start(u64 addr)
@@ -156,19 +232,11 @@ void trace_get_info(COMMAND_HANDLER_ARGS)
 
     while (true)
     {
-        trace_entry_t current_entry = {0};
-        i32 bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
+        custom_trace_entry_t current_entry = {0};
+        int bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
 
-        static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen may be inappropriate.");
-        if (bytes_read < (i32) sizeof(current_entry))
-        {
-            assert(bytes_read >= 0); // TODO call gzerror?
-            if (bytes_read != 0)
-            {
-                printf("ERROR: only able to read %d bytes???\n", bytes_read);
-            }
-            break;
-        }
+        assert(sizeof(current_entry) <= INT_MAX);
+        if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
 
         update_trace_stats(&global_stats, current_entry);
     }
@@ -215,19 +283,11 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
 
     while (true)
     {
-        trace_entry_t current_entry = {0};
-        i32 bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
+        custom_trace_entry_t current_entry = {0};
+        int bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
 
-        static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen may be inappropriate.");
-        if (bytes_read < (i32) sizeof(current_entry))
-        {
-            assert(bytes_read >= 0); // TODO call gzerror?
-            if (bytes_read != 0)
-            {
-                printf("ERROR: only able to read %d bytes???\n", bytes_read);
-            }
-            break;
-        }
+        assert(sizeof(current_entry) <= INT_MAX);
+        if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
 
         update_trace_stats(&global_stats_before, current_entry);
 
@@ -308,11 +368,43 @@ void trace_convert(COMMAND_HANDLER_ARGS)
 
 void trace_convert_drcachesim(COMMAND_HANDLER_ARGS)
 {
-    // TODO
+    // TODO test
 
-    // add headers
-    // emit trace entries
-    // add footers
+    if (num_args != 2)
+    {
+        printf("Usage: %s %s <input custom trace file> <output drcachesim trace file>\n", exe_name, cmd_name);
+        quit();
+    }
+
+    char * input_trace_filename = args[0];
+    char * output_trace_filename = args[1];
+
+    if (file_exists(output_trace_filename))
+    {
+        printf("ERROR: Attempted to overwrite existing file \"%s\".\n", output_trace_filename);
+        quit();
+    }
+
+    gzFile input_file = gzopen(input_trace_filename, "rb");
+    gzFile output_file = gzopen(output_trace_filename, "wb");
+
+    write_drcachesim_header(output_file);
+
+    while (true)
+    {
+        custom_trace_entry_t current_entry;
+        int bytes_read = gzread(input_file, &current_entry, sizeof(current_entry));
+
+        assert(sizeof(current_entry) <= INT_MAX);
+        if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
+
+        write_drcachesim_trace_entry(output_file, current_entry);
+    }
+
+    write_drcachesim_footer(output_file);
+
+    gzclose(input_file);
+    gzclose(output_file);
 }
 
 #define CAP_SIZE_BITS 128
@@ -371,19 +463,11 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
 
     while (true)
     {
-        trace_entry_t current_entry = {0};
-        i32 bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
+        custom_trace_entry_t current_entry = {0};
+        int bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
 
-        static_assert(sizeof(current_entry) <= INT32_MAX, "Integral type chosen may be inappropriate.");
-        if (bytes_read < (i32) sizeof(current_entry))
-        {
-            assert(bytes_read >= 0); // TODO call gzerror?
-            if (bytes_read != 0)
-            {
-                printf("ERROR: only able to read %d bytes???\n", bytes_read);
-            }
-            break;
-        }
+        assert(sizeof(current_entry) <= INT_MAX);
+        if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
 
         if (!check_paddr_valid(current_entry.paddr))
         {
@@ -413,25 +497,25 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
             {
                 switch (current_entry.type)
                 {
-                    case TRACE_ENTRY_TYPE_INSTR:
+                    case CUSTOM_TRACE_TYPE_INSTR:
                     {
                         initialized_tags_INSTRs.insert(paddr);
                         assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) == 0);
                         // NOTE assuming tag is 0, leaving as initialised
                     } break;
-                    case TRACE_ENTRY_TYPE_LOAD:
+                    case CUSTOM_TRACE_TYPE_LOAD:
                     {
                         initialized_tags_LOADs.insert(paddr);
                         // NOTE assuming tag is 0, leaving as initialised
                         assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) == 0);
                     } break;
-                    case TRACE_ENTRY_TYPE_STORE:
+                    case CUSTOM_TRACE_TYPE_STORE:
                     {
                         dbg_modified_tags.insert(paddr);
                         // NOTE assuming tag before store is 0, leaving as initialised
                         assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) == 0);
                     } break;
-                    case TRACE_ENTRY_TYPE_CLOAD:
+                    case CUSTOM_TRACE_TYPE_CLOAD:
                     {
                         initialized_tags_CLOADs.insert(paddr);
                         assert(paddr == current_entry.paddr && "Unaligned CLOAD.");
@@ -442,7 +526,7 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
                         }
                         else assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) == 0);
                     } break;
-                    case TRACE_ENTRY_TYPE_CSTORE:
+                    case CUSTOM_TRACE_TYPE_CSTORE:
                     {
                         dbg_modified_tags.insert(paddr);
                         assert(paddr == current_entry.paddr && "Unaligned CSTORE.");
@@ -460,11 +544,11 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
             }
             else
             {
-                if (current_entry.type == TRACE_ENTRY_TYPE_STORE || current_entry.type == TRACE_ENTRY_TYPE_CSTORE)
+                if (current_entry.type == CUSTOM_TRACE_TYPE_STORE || current_entry.type == CUSTOM_TRACE_TYPE_CSTORE)
                 {
                     dbg_modified_tags.insert(paddr);
                 }
-                else if (current_entry.type == TRACE_ENTRY_TYPE_CLOAD)
+                else if (current_entry.type == CUSTOM_TRACE_TYPE_CLOAD)
                 {
                     bool was_modified_since_init = dbg_modified_tags.find(paddr) != dbg_modified_tags.end();
                     if (!was_modified_since_init)

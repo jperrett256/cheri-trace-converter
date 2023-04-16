@@ -2,7 +2,7 @@ CXX := g++
 
 BUILD_DIR := build
 
-SRC_FILES := src/main.cc src/common.cc src/handlers.cc
+SRC_FILES := $(wildcard src/*.cc)
 EXE_FILE := tracesim
 
 INC_DIR := inc

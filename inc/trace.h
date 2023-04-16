@@ -1,21 +1,19 @@
 #ifndef TRACE_INCLUDE
 #define TRACE_INCLUDE
 
-#include <inttypes.h>
+#include <stdint.h>
 
-#define FMT_ADDR "%016" PRIx64
-
-enum trace_entry_type_t
+enum custom_trace_type_t
 {
-    TRACE_ENTRY_TYPE_INSTR,
-    TRACE_ENTRY_TYPE_LOAD,
-    TRACE_ENTRY_TYPE_STORE,
-    TRACE_ENTRY_TYPE_CLOAD,
-    TRACE_ENTRY_TYPE_CSTORE,
+    CUSTOM_TRACE_TYPE_INSTR,
+    CUSTOM_TRACE_TYPE_LOAD,
+    CUSTOM_TRACE_TYPE_STORE,
+    CUSTOM_TRACE_TYPE_CLOAD,
+    CUSTOM_TRACE_TYPE_CSTORE,
 };
 
-typedef struct trace_entry_t trace_entry_t;
-struct trace_entry_t
+typedef struct custom_trace_entry_t custom_trace_entry_t;
+struct custom_trace_entry_t
 {
     uint8_t type;
     uint8_t tag; // ignore for LOADs
