@@ -46,6 +46,10 @@ void write_drcachesim_trace_entry(gzFile file, custom_trace_entry_t custom_entry
     trace_entry_t drcachesim_entry;
     switch (custom_entry.type)
     {
+        case CUSTOM_TRACE_TYPE_INSTR:
+        {
+            drcachesim_entry.type = TRACE_TYPE_INSTR;
+        } break;
         case CUSTOM_TRACE_TYPE_LOAD:
         case CUSTOM_TRACE_TYPE_CLOAD:
         {
@@ -61,7 +65,7 @@ void write_drcachesim_trace_entry(gzFile file, custom_trace_entry_t custom_entry
 
     // TODO should emit vaddr or paddr? paddr for data, vaddr for instructions?
     // TODO test both
-    drcachesim_entry.addr = custom_entry.vaddr;
+    drcachesim_entry.addr = custom_entry.paddr;
     drcachesim_entry.size = custom_entry.size;
 
     gzwrite(file, &drcachesim_entry, sizeof(drcachesim_entry));

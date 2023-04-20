@@ -53,7 +53,7 @@ int main(int argc, char * argv[])
         },
         {
             string_lit("convert-drcachesim"),
-            handler_missing // TODO
+            trace_convert_drcachesim
         },
         {
             string_lit("get-initial-tags"),
@@ -61,7 +61,7 @@ int main(int argc, char * argv[])
         },
         {
             string_lit("simulate"),
-            handler_missing // TODO
+            trace_simulate
         }
     };
 

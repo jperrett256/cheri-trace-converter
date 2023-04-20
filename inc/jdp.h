@@ -23,9 +23,9 @@ typedef uint16_t    u16;
 typedef uint32_t    u32;
 typedef uint64_t    u64;
 
-typedef i8          b8;
-typedef i16         b16;
-typedef i32         b32;
+typedef u8          b8;
+typedef u16         b16;
+typedef u32         b32;
 
 typedef float       f32;
 typedef double      f64;
@@ -38,6 +38,7 @@ typedef double      f64;
 #define array_count(a)              (sizeof(a) / sizeof((a)[0]))
 #define align_floor_pow_2(x, b)     ((x) & (~((b) - 1)))
 #define align_ceil_pow_2(x, b)      (((x) + ((b) - 1)) & (~((b) - 1)))
+#define check_aligned_pow_2(x, b)   (((x) & ((b) - 1)) == 0)
 
 #define ARENA_COMMIT_SIZE       KILOBYTES(64)
 #define COMMON_TEMP_BUF_LEN    	KILOBYTES(8)
