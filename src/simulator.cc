@@ -3,10 +3,7 @@
 #include "simulator.h"
 
 #include <stddef.h> // TODO get rid of C++?
-
-// TODO do stats properly
-u64 dbg_dram_writes = 0;
-u64 dbg_dram_reads = 0;
+#include <stdio.h>
 
 // TODO do actual tag cache simulation
 // TODO alternatively, could output requests to tag cache, and run the tag cache simulation in a separate pass (might massively save time)
@@ -24,10 +21,10 @@ static void device_write(device_t * device, u64 paddr, b8 tags_cheri)
         } break;
         case DEVICE_TYPE_TAG_CACHE:
         {
-            dbg_dram_writes++;
+            device->tag_cache.stats.writes++;
 
-            assert(check_aligned_pow_2(paddr, CACHE_LINE_SIZE));
-            assert(check_aligned_pow_2(paddr, CAP_SIZE_BYTES));
+            assert(paddr % CACHE_LINE_SIZE == 0);
+            assert(paddr % CAP_SIZE_BYTES == 0);
 
             assert(CACHE_LINE_SIZE / CAP_SIZE_BYTES == 8); // TODO handle other cache line sizes
 
@@ -68,10 +65,10 @@ static b8 device_read(device_t * device, u64 paddr)
         } break;
         case DEVICE_TYPE_TAG_CACHE:
         {
-            dbg_dram_reads++;
+            device->tag_cache.stats.reads++;
 
-            assert(check_aligned_pow_2(paddr, CACHE_LINE_SIZE));
-            assert(check_aligned_pow_2(paddr, CAP_SIZE_BYTES));
+            assert(paddr % CACHE_LINE_SIZE == 0);
+            assert(paddr % CAP_SIZE_BYTES == 0);
 
             assert(CACHE_LINE_SIZE / CAP_SIZE_BYTES == 8); // TODO handle other cache line sizes
 
@@ -104,7 +101,8 @@ device_t tag_cache_init(arena_t * arena)
     return device;
 }
 
-device_t cache_init(arena_t * arena, u32 size, u32 num_ways, device_t * parent)
+/* TODO if you get rid of C++, review uses of const */
+device_t cache_init(arena_t * arena, const char * name, u32 size, u32 num_ways, device_t * parent)
 {
     device_t device = {0};
     device.type = DEVICE_TYPE_CACHE;
@@ -117,16 +115,17 @@ device_t cache_init(arena_t * arena, u32 size, u32 num_ways, device_t * parent)
     device.cache.entries = arena_push_array(arena, cache_line_t, size);
     for (i64 i = 0; i < size; i++) device.cache.entries[i].tag_addr = INVALID_TAG;
 
+    assert(name);
+    device.cache.name = (char *) name; // TODO get rid of C++?
+
     return device;
 }
 
 cache_line_t * cache_lookup(device_t * device, u64 paddr)
 {
-    assert(device->type == DEVICE_TYPE_CACHE); // TODO switch statement?
+    assert(device->type == DEVICE_TYPE_CACHE);
 
-    // TODO check equivalent
-    // assert(paddr == align_floor_pow_2(paddr, CACHE_LINE_SIZE));
-    assert(check_aligned_pow_2(paddr, CACHE_LINE_SIZE));
+    assert(paddr % CACHE_LINE_SIZE == 0);
 
     u64 tag_addr = paddr >> CACHE_LINE_SIZE_BITS;
     u32 num_sets = device->cache.size / device->cache.num_ways; // TODO calculate num_sets at init?
@@ -145,12 +144,16 @@ cache_line_t * cache_lookup(device_t * device, u64 paddr)
     }
 
     cache_line_t * result = NULL;
-    if (way >= 0) /* HIT */
+    if (way >= 0)
     {
+        device->cache.stats.hits++;
+
         result = &device->cache.entries[set_start_idx + way];
     }
-    else /* MISS */
+    else
     {
+        device->cache.stats.misses++;
+
         // choose a way to fill next
         way = -1;
         u16 largest_counter = 0;
@@ -250,4 +253,68 @@ cache_line_t * cache_lookup(device_t * device, u64 paddr)
 //     bool dirty;
 // };
 
-// // TODO do we need to store tag data in cache lines or can it all be in a single table?
+static char * device_get_name(device_t * device)
+{
+    switch (device->type)
+    {
+        case DEVICE_TYPE_CACHE:
+        {
+            assert(device->cache.name);
+            return device->cache.name;
+        } break;
+        case DEVICE_TYPE_TAG_CACHE:
+        {
+            return (char *) "TAG CONTROLLER"; // TODO get rid of C++?
+        } break;
+        default: assert(!"Impossible.");
+    }
+
+    assert(!"Impossible.");
+    return NULL;
+}
+
+#define INDENT4 "    "
+#define INDENT8 INDENT4 INDENT4
+
+void device_print_configuration(device_t * device)
+{
+    switch (device->type)
+    {
+        case DEVICE_TYPE_CACHE:
+        {
+            printf(INDENT4 "%s (%u-way, %u bytes) -> %s\n",
+                device_get_name(device), device->cache.num_ways, device->cache.size,
+                device->parent ? device_get_name(device->parent) : "NULL");
+        } break;
+        case DEVICE_TYPE_TAG_CACHE:
+        {
+            printf(INDENT4 "%s\n", device_get_name(device)); // TODO associativity, size?
+        } break;
+        default: assert(!"Impossible.");
+    }
+}
+
+
+void device_print_statistics(device_t * device)
+{
+    printf(INDENT4 "%s:\n", device_get_name(device));
+
+    switch (device->type)
+    {
+        case DEVICE_TYPE_CACHE:
+        {
+            printf(INDENT8 "Hits: %lu\n", device->cache.stats.hits);
+            printf(INDENT8 "Misses: %lu\n", device->cache.stats.misses);
+
+            printf(INDENT8 "Miss rate: %f\n",
+                (double) device->cache.stats.misses / (device->cache.stats.hits + device->cache.stats.misses));
+        } break;
+        case DEVICE_TYPE_TAG_CACHE:
+        {
+            printf(INDENT8 "Reads: %lu\n", device->tag_cache.stats.reads);
+            printf(INDENT8 "Writes: %lu\n", device->tag_cache.stats.writes);
+        } break;
+        default: assert(!"Impossible.");
+    }
+}
+

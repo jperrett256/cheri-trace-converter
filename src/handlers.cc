@@ -620,10 +620,27 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
     size_t bytes_read = fread(tag_controller.tag_cache.tags, sizeof(u8), tag_controller.tag_cache.tags_size, initial_tags_file);
     assert(bytes_read == tag_controller.tag_cache.tags_size);
 
-    device_t l2_cache = cache_init(arena, KILOBYTES(512), 16, &tag_controller);
+    device_t l2_cache = cache_init(arena, "L2", KILOBYTES(512), 16, &tag_controller);
 
-    device_t l1_instr_cache = cache_init(arena, KILOBYTES(48), 4, &l2_cache);
-    device_t l1_data_cache = cache_init(arena, KILOBYTES(32), 4, &l2_cache);
+    device_t l1_instr_cache = cache_init(arena, "L1I", KILOBYTES(48), 4, &l2_cache);
+    device_t l1_data_cache = cache_init(arena, "L1D", KILOBYTES(32), 4, &l2_cache);
+
+    device_t * all_devices[] =
+    {
+        &l1_instr_cache,
+        &l1_data_cache,
+        &l2_cache,
+        &tag_controller
+    };
+    assert(array_count(all_devices) <= UINT32_MAX);
+    u32 num_devices = array_count(all_devices);
+
+    printf("Simulating with following configuration:\n");
+    for (i64 i = 0; i < num_devices; i++)
+    {
+        device_print_configuration(all_devices[i]);
+    }
+    printf("\n");
 
     while (true)
     {
@@ -648,10 +665,8 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
             if (start_addr_cap < paddr) start_addr_cap = paddr;
             if (end_addr_cap > paddr) end_addr_cap = paddr;
 
-            // assert(start_addr_cap_aligned == align_floor_pow_2(start_addr_cap_aligned));
-            // assert(end_addr_cap_aligned == align_floor_pow_2(end_addr_cap_aligned));
-            assert(check_aligned_pow_2(start_addr_cap, CAP_SIZE_BYTES));
-            assert(check_aligned_pow_2(end_addr_cap, CAP_SIZE_BYTES));
+            assert(start_addr_cap % CAP_SIZE_BYTES == 0);
+            assert(end_addr_cap % CAP_SIZE_BYTES == 0);
 
             if (current_entry.type == CUSTOM_TRACE_TYPE_INSTR)
             {
@@ -705,9 +720,17 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
         }
     }
 
-    // TODO do stats properly
-    printf("DRAM Reads: %lu\n", dbg_dram_reads);
-    printf("DRAM Writes: %lu\n", dbg_dram_writes);
+    printf("Statistics:\n");
+    for (i64 i = 0; i < num_devices; i++)
+    {
+        device_print_statistics(all_devices[i]);
+    }
+    printf("\n");
+
+    // for (i64 i = 0; i < array_count(all_devices); i++)
+    // {
+    //     device_cleanup(&all_devices[i]);
+    // }
 
     // TODO intialise leaf tag table from initial tag state file
     // TODO initialise root tag table from the leaf tag table

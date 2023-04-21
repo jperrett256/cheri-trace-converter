@@ -38,7 +38,6 @@ typedef double      f64;
 #define array_count(a)              (sizeof(a) / sizeof((a)[0]))
 #define align_floor_pow_2(x, b)     ((x) & (~((b) - 1)))
 #define align_ceil_pow_2(x, b)      (((x) + ((b) - 1)) & (~((b) - 1)))
-#define check_aligned_pow_2(x, b)   (((x) & ((b) - 1)) == 0)
 
 #define ARENA_COMMIT_SIZE       KILOBYTES(64)
 #define COMMON_TEMP_BUF_LEN    	KILOBYTES(8)

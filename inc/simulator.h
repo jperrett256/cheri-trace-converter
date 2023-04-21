@@ -7,6 +7,33 @@ static_assert((1 << CACHE_LINE_SIZE_BITS) == CACHE_LINE_SIZE, "Cache line size c
 
 #define INVALID_TAG ((u64) -1)
 
+
+/*
+Crucial points:
+- Treating the caches above the tag controller (L1, L2, etc.) differently from the tag controller
+- Because the behaviour of the tag cache depends on the cache contents, we need to maintain a view of the tag state from the perspective of the tag controller.
+- Therefore, we have:
+	- A simple buffer containing the entire tag state in memory, but from the view of the tag controller
+	- The cache lines in the caches above the tag controller store tags, and write them back into upper caches / tag buffer as required (write-back cache)
+*/
+
+typedef struct cache_stats_t cache_stats_t;
+struct cache_stats_t
+{
+	u64 hits;
+	u64 misses;
+	// TODO types of misses?
+	// TODO prefetcher?
+};
+
+typedef struct tag_cache_stats_t tag_cache_stats_t;
+struct tag_cache_stats_t
+{
+	u64 reads;
+	u64 writes;
+	// TODO
+};
+
 // for the L1/L2/L3 caches
 typedef struct cache_line_t cache_line_t;
 struct cache_line_t
@@ -30,6 +57,8 @@ struct cache_t
     u32 num_ways;
     cache_t * parent;
     cache_line_t * entries;
+    cache_stats_t stats;
+    char * name;
 };
 
 typedef struct tag_cache_t tag_cache_t;
@@ -39,6 +68,7 @@ struct tag_cache_t
     // cache_line_t * entries; // NOTE won't store tag in them
     u32 tags_size;
     u8 * tags; // NOTE tag controller's view of memory
+    tag_cache_stats_t stats;
 };
 
 enum device_type_t
@@ -60,17 +90,13 @@ struct device_t
     };
 };
 
-// // TODO do stats properly
-// typedef struct simulator_stats_t simulator_stats_t;
-// struct simulator_stats_t
-// {
-// 	// TODO
-// };
-extern u64 dbg_dram_writes;
-extern u64 dbg_dram_reads;
-
 cache_line_t * cache_lookup(device_t * device, u64 paddr);
-device_t cache_init(arena_t * arena, u32 size, u32 num_ways, device_t * parent);
+device_t cache_init(arena_t * arena, const char * name, u32 size, u32 num_ways, device_t * parent);
+
 device_t tag_cache_init(arena_t * arena);
+
+void device_print_configuration(device_t * device);
+void device_print_statistics(device_t * device);
+// void device_cleanup(device_t * device);
 
 #endif /* SIMULATOR_INCLUDE */
