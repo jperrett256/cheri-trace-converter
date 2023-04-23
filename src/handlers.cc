@@ -609,7 +609,7 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
     char * output_requests_filename = args[2];
 
     // device_t tag_controller = tag_cache_init(arena, initial_tags_filename); // TODO , KILOBYTES(32), 4, NULL);
-    device_t tag_controller = tag_cache_interface_init(arena, initial_tags_filename, output_requests_filename);
+    device_t tag_controller = controller_interface_init(arena, initial_tags_filename, output_requests_filename);
 
     device_t l2_cache = cache_init(arena, "L2", KILOBYTES(512), 16, &tag_controller);
 

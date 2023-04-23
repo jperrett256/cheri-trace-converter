@@ -10,91 +10,6 @@
 // TODO alternatively, could output requests to tag cache, and run the tag cache simulation in a separate pass (might massively save time)
 // TODO should definitely try lz4
 
-// TODO move function(s) up?
-static void tag_cache_interface_write_entry(device_t * device, u8 type, u64 paddr, b8 tags);
-
-static void device_write(device_t * device, u64 paddr, b8 tags_cheri)
-{
-    switch (device->type)
-    {
-        case DEVICE_TYPE_CACHE:
-        {
-            cache_line_t * cache_line = cache_lookup(device, paddr);
-            cache_line->tags_cheri = tags_cheri;
-            // TODO dirty bit?
-        } break;
-        case DEVICE_TYPE_TAG_CACHE_INTERFACE:
-        {
-            device->tag_cache_interface.stats.writes++;
-            tag_cache_interface_write_entry(device, TAG_CACHE_REQUEST_TYPE_WRITE, paddr, tags_cheri);
-
-            assert(paddr % CACHE_LINE_SIZE == 0);
-            assert(paddr % CAP_SIZE_BYTES == 0);
-
-            assert(CACHE_LINE_SIZE / CAP_SIZE_BYTES == 8); // TODO handle other cache line sizes
-
-            assert(check_paddr_valid(paddr));
-            u64 mem_offset = paddr - BASE_PADDR;
-            i64 tag_table_idx = mem_offset / CAP_SIZE_BYTES / 8;
-            assert(tag_table_idx >= 0 && tag_table_idx < device->tag_cache_interface.tags_size);
-
-            device->tag_cache_interface.tags[tag_table_idx] = tags_cheri;
-            // // TODO can definitely optimise, no need to copy bit by bit (especially if each cache line has 8 tag bits)
-            // for (u64 paddr_cap = paddr; paddr_cap < paddr + CACHE_LINE_SIZE; paddr_cap += CAP_SIZE_BYTES)
-            // {
-            //     // TODO utility function for getting tag idx and tag bit?
-            //     assert(check_paddr_valid(paddr));
-            //     u64 mem_offset = paddr - BASE_PADDR;
-
-            //     i64 tag_table_idx = mem_offset / CAP_SIZE_BYTES / 8;
-            //     i8 tag_entry_bit = mem_offset / CAP_SIZE_BYTES % 8;
-            //     assert(tag_table_idx >= 0 && tag_table_idx < device->tag_cache_interface.tags_size);
-            //     assert(tag_entry_bit >= 0 && tag_entry_bit < 8);
-
-            //     // initial_tag_state[tag_table_idx] |= 1 << tag_entry_bit;
-            // }
-        } break;
-        default: assert(!"Impossible.");
-    }
-}
-
-static b8 device_read(device_t * device, u64 paddr)
-{
-    switch (device->type)
-    {
-        case DEVICE_TYPE_CACHE:
-        {
-            cache_line_t * cache_line = cache_lookup(device, paddr);
-            return cache_line->tags_cheri;
-            // TODO dirty bit?
-        } break;
-        case DEVICE_TYPE_TAG_CACHE_INTERFACE:
-        {
-            device->tag_cache_interface.stats.reads++;
-
-            assert(paddr % CACHE_LINE_SIZE == 0);
-            assert(paddr % CAP_SIZE_BYTES == 0);
-
-            assert(CACHE_LINE_SIZE / CAP_SIZE_BYTES == 8); // TODO handle other cache line sizes
-
-            assert(check_paddr_valid(paddr));
-            u64 mem_offset = paddr - BASE_PADDR;
-            i64 tag_table_idx = mem_offset / CAP_SIZE_BYTES / 8;
-            assert(tag_table_idx >= 0 && tag_table_idx < device->tag_cache_interface.tags_size);
-
-            b8 tags_cheri = device->tag_cache_interface.tags[tag_table_idx];
-
-            tag_cache_interface_write_entry(device, TAG_CACHE_REQUEST_TYPE_WRITE, paddr, tags_cheri);
-
-            return tags_cheri;
-        } break;
-        default: assert(!"Impossible.");
-    }
-
-    assert(!"Impossible.");
-    return 0;
-}
-
 static void fill_initial_tags(char * initial_tags_filename, u32 tags_buffer_size, u8 * tags_buffer)
 {
     FILE * initial_tags_file = fopen(initial_tags_filename, "rb");
@@ -121,15 +36,15 @@ device_t tag_cache_init(arena_t * arena, char * initial_tags_filename)
 }
 */
 
-device_t tag_cache_interface_init(arena_t * arena, char * initial_tags_filename, char * output_filename)
+device_t controller_interface_init(arena_t * arena, char * initial_tags_filename, char * output_filename)
 {
     device_t device = {0};
-    device.type = DEVICE_TYPE_TAG_CACHE_INTERFACE;
+    device.type = DEVICE_TYPE_CONTROLLER_INTERFACE;
 
     // TODO move these two lines into the fill_initial_tags function as well?
-    device.tag_cache_interface.tags_size = MEMORY_SIZE / CAP_SIZE_BYTES / 8;
-    device.tag_cache_interface.tags = arena_push_array(arena, u8, device.tag_cache_interface.tags_size);
-    fill_initial_tags(initial_tags_filename, device.tag_cache_interface.tags_size, device.tag_cache_interface.tags);
+    device.controller_interface.tags_size = MEMORY_SIZE / CAP_SIZE_BYTES / 8;
+    device.controller_interface.tags = arena_push_array(arena, u8, device.controller_interface.tags_size);
+    fill_initial_tags(initial_tags_filename, device.controller_interface.tags_size, device.controller_interface.tags);
 
     assert(output_filename);
     if (file_exists(output_filename))
@@ -139,15 +54,15 @@ device_t tag_cache_interface_init(arena_t * arena, char * initial_tags_filename,
         quit();
     }
 
-    device.tag_cache_interface.output = gzopen(output_filename, "wb");
-    assert(device.tag_cache_interface.output);
+    device.controller_interface.output = gzopen(output_filename, "wb");
+    assert(device.controller_interface.output);
 
     return device;
 }
 
-static void tag_cache_interface_write_entry(device_t * device, u8 type, u64 paddr, b8 tags)
+static void controller_interface_write_entry(device_t * device, u8 type, u64 paddr, b8 tags)
 {
-    assert(device->type == DEVICE_TYPE_TAG_CACHE_INTERFACE);
+    assert(device->type == DEVICE_TYPE_CONTROLLER_INTERFACE);
 
     tag_cache_request_t request = {0};
     request.type = type;
@@ -156,18 +71,102 @@ static void tag_cache_interface_write_entry(device_t * device, u8 type, u64 padd
     static_assert(CACHE_LINE_SIZE <= UINT16_MAX, "Invalid cache line size.");
     request.size = CACHE_LINE_SIZE;
 
-    assert(device->tag_cache_interface.output);
-    int bytes_written = gzwrite(device->tag_cache_interface.output, &request, sizeof(request));
+    assert(device->controller_interface.output);
+    int bytes_written = gzwrite(device->controller_interface.output, &request, sizeof(request));
     assert(bytes_written == sizeof(request));
 }
 
-static void tag_cache_interface_cleanup(device_t * device)
+static void controller_interface_cleanup(device_t * device)
 {
-    assert(device->type == DEVICE_TYPE_TAG_CACHE_INTERFACE);
+    assert(device->type == DEVICE_TYPE_CONTROLLER_INTERFACE);
 
-    assert(device->tag_cache_interface.output);
-    gzclose(device->tag_cache_interface.output);
+    assert(device->controller_interface.output);
+    gzclose(device->controller_interface.output);
 }
+
+
+static void device_write(device_t * device, u64 paddr, b8 tags_cheri)
+{
+    switch (device->type)
+    {
+        case DEVICE_TYPE_CACHE:
+        {
+            cache_line_t * cache_line = cache_lookup(device, paddr);
+            cache_line->tags_cheri = tags_cheri;
+            // TODO dirty bit?
+        } break;
+        case DEVICE_TYPE_CONTROLLER_INTERFACE:
+        {
+            device->controller_interface.stats.writes++;
+            controller_interface_write_entry(device, TAG_CACHE_REQUEST_TYPE_WRITE, paddr, tags_cheri);
+
+            assert(paddr % CACHE_LINE_SIZE == 0);
+            assert(paddr % CAP_SIZE_BYTES == 0);
+
+            assert(CACHE_LINE_SIZE / CAP_SIZE_BYTES == 8); // TODO handle other cache line sizes
+
+            assert(check_paddr_valid(paddr));
+            u64 mem_offset = paddr - BASE_PADDR;
+            i64 tag_table_idx = mem_offset / CAP_SIZE_BYTES / 8;
+            assert(tag_table_idx >= 0 && tag_table_idx < device->controller_interface.tags_size);
+
+            device->controller_interface.tags[tag_table_idx] = tags_cheri;
+            // // TODO can definitely optimise, no need to copy bit by bit (especially if each cache line has 8 tag bits)
+            // for (u64 paddr_cap = paddr; paddr_cap < paddr + CACHE_LINE_SIZE; paddr_cap += CAP_SIZE_BYTES)
+            // {
+            //     // TODO utility function for getting tag idx and tag bit?
+            //     assert(check_paddr_valid(paddr));
+            //     u64 mem_offset = paddr - BASE_PADDR;
+
+            //     i64 tag_table_idx = mem_offset / CAP_SIZE_BYTES / 8;
+            //     i8 tag_entry_bit = mem_offset / CAP_SIZE_BYTES % 8;
+            //     assert(tag_table_idx >= 0 && tag_table_idx < device->controller_interface.tags_size);
+            //     assert(tag_entry_bit >= 0 && tag_entry_bit < 8);
+
+            //     // initial_tag_state[tag_table_idx] |= 1 << tag_entry_bit;
+            // }
+        } break;
+        default: assert(!"Impossible.");
+    }
+}
+
+static b8 device_read(device_t * device, u64 paddr)
+{
+    switch (device->type)
+    {
+        case DEVICE_TYPE_CACHE:
+        {
+            cache_line_t * cache_line = cache_lookup(device, paddr);
+            return cache_line->tags_cheri;
+            // TODO dirty bit?
+        } break;
+        case DEVICE_TYPE_CONTROLLER_INTERFACE:
+        {
+            device->controller_interface.stats.reads++;
+
+            assert(paddr % CACHE_LINE_SIZE == 0);
+            assert(paddr % CAP_SIZE_BYTES == 0);
+
+            assert(CACHE_LINE_SIZE / CAP_SIZE_BYTES == 8); // TODO handle other cache line sizes
+
+            assert(check_paddr_valid(paddr));
+            u64 mem_offset = paddr - BASE_PADDR;
+            i64 tag_table_idx = mem_offset / CAP_SIZE_BYTES / 8;
+            assert(tag_table_idx >= 0 && tag_table_idx < device->controller_interface.tags_size);
+
+            b8 tags_cheri = device->controller_interface.tags[tag_table_idx];
+
+            controller_interface_write_entry(device, TAG_CACHE_REQUEST_TYPE_WRITE, paddr, tags_cheri);
+
+            return tags_cheri;
+        } break;
+        default: assert(!"Impossible.");
+    }
+
+    assert(!"Impossible.");
+    return 0;
+}
+
 
 /* TODO if you get rid of C++, review uses of const */
 device_t cache_init(arena_t * arena, const char * name, u32 size, u32 num_ways, device_t * parent)
@@ -334,7 +333,7 @@ static char * device_get_name(device_t * device)
         // {
         //     return (char *) "TAG CONTROLLER"; // TODO get rid of C++?
         // } break;
-        case DEVICE_TYPE_TAG_CACHE_INTERFACE:
+        case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
             return (char *) "TAG CONTROLLER (INTERFACE)"; // TODO get rid of C++?
         } break;
@@ -356,7 +355,7 @@ void device_print_configuration(device_t * device)
                 device->parent ? device_get_name(device->parent) : "NULL");
         } break;
         // case DEVICE_TYPE_TAG_CACHE: // TODO associativity, size?
-        case DEVICE_TYPE_TAG_CACHE_INTERFACE:
+        case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
             printf(INDENT4 "%s\n", device_get_name(device));
         } break;
@@ -378,10 +377,10 @@ void device_print_statistics(device_t * device)
             printf(INDENT8 "Miss rate: %f\n",
                 (double) device->cache.stats.misses / (device->cache.stats.hits + device->cache.stats.misses));
         } break;
-        case DEVICE_TYPE_TAG_CACHE_INTERFACE:
+        case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
-            printf(INDENT8 "Reads: %lu\n", device->tag_cache_interface.stats.reads);
-            printf(INDENT8 "Writes: %lu\n", device->tag_cache_interface.stats.writes);
+            printf(INDENT8 "Reads: %lu\n", device->controller_interface.stats.reads);
+            printf(INDENT8 "Writes: %lu\n", device->controller_interface.stats.writes);
         } break;
         default: assert(!"Impossible.");
     }
@@ -391,9 +390,9 @@ void device_cleanup(device_t * device)
 {
     switch (device->type)
     {
-        case DEVICE_TYPE_TAG_CACHE_INTERFACE:
+        case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
-            tag_cache_interface_cleanup(device);
+            controller_interface_cleanup(device);
         } break;
         case DEVICE_TYPE_CACHE:
             break;

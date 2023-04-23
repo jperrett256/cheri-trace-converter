@@ -28,8 +28,8 @@ struct cache_stats_t
 	// TODO prefetcher?
 };
 
-typedef struct tag_cache_interface_stats_t tag_cache_interface_stats_t;
-struct tag_cache_interface_stats_t
+typedef struct controller_interface_stats_t controller_interface_stats_t;
+struct controller_interface_stats_t
 {
 	u64 reads;
 	u64 writes;
@@ -74,21 +74,19 @@ struct cache_t
 //     tag_cache_stats_t stats;
 // };
 
-// TODO rename to dram_interface??
-// TODO or controller_interface?
-typedef struct tag_cache_interface_t tag_cache_interface_t;
-struct tag_cache_interface_t
+typedef struct controller_interface_t controller_interface_t;
+struct controller_interface_t
 {
 	gzFile output;
     u32 tags_size;
     u8 * tags; // NOTE tag controller's view of memory
-    tag_cache_interface_stats_t stats;
+    controller_interface_stats_t stats;
 };
 
 enum device_type_t
 {
     DEVICE_TYPE_CACHE,
-    DEVICE_TYPE_TAG_CACHE_INTERFACE
+    DEVICE_TYPE_CONTROLLER_INTERFACE
     // DEVICE_TYPE_TAG_CACHE // TODO
     // TODO memory device as well?
 };
@@ -102,7 +100,7 @@ struct device_t
     {
         cache_t cache;
         // tag_cache_t tag_cache;
-        tag_cache_interface_t tag_cache_interface;
+        controller_interface_t controller_interface;
     };
 };
 
@@ -110,7 +108,7 @@ cache_line_t * cache_lookup(device_t * device, u64 paddr);
 device_t cache_init(arena_t * arena, const char * name, u32 size, u32 num_ways, device_t * parent);
 
 device_t tag_cache_init(arena_t * arena, char * initial_tags_filename);
-device_t tag_cache_interface_init(arena_t * arena, char * initial_tags_filename, char * output_filename);
+device_t controller_interface_init(arena_t * arena, char * initial_tags_filename, char * output_filename);
 
 void device_print_configuration(device_t * device);
 void device_print_statistics(device_t * device);
