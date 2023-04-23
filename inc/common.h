@@ -14,4 +14,7 @@ static inline bool check_paddr_valid(u64 paddr)
     return paddr >= BASE_PADDR && paddr < BASE_PADDR + MEMORY_SIZE;
 }
 
+#define INDENT4 "    "
+#define INDENT8 INDENT4 INDENT4
+
 #endif /* COMMON_INCLUDE */

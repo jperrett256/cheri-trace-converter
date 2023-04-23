@@ -1,12 +1,14 @@
 #ifndef SIMULATOR_INCLUDE
 #define SIMULATOR_INCLUDE
 
+#include "jdp.h"
+#include <zlib.h>
+
 #define CACHE_LINE_SIZE 128
 #define CACHE_LINE_SIZE_BITS 7
 static_assert((1 << CACHE_LINE_SIZE_BITS) == CACHE_LINE_SIZE, "Cache line size constants are incorrect.");
 
 #define INVALID_TAG ((u64) -1)
-
 
 /*
 Crucial points:
@@ -26,12 +28,13 @@ struct cache_stats_t
 	// TODO prefetcher?
 };
 
-typedef struct tag_cache_stats_t tag_cache_stats_t;
-struct tag_cache_stats_t
+typedef struct tag_cache_interface_stats_t tag_cache_interface_stats_t;
+struct tag_cache_interface_stats_t
 {
 	u64 reads;
 	u64 writes;
-	// TODO
+	// TODO reads_untagged?
+	// TODO writes_untagged?
 };
 
 // for the L1/L2/L3 caches
@@ -61,20 +64,32 @@ struct cache_t
     char * name;
 };
 
-typedef struct tag_cache_t tag_cache_t;
-struct tag_cache_t
+// TODO
+// typedef struct tag_cache_t tag_cache_t;
+// struct tag_cache_t
+// {
+//     cache_line_t * entries; // NOTE won't store tag in them
+//     u32 tags_size;
+//     u8 * tags; // NOTE tag controller's view of memory
+//     tag_cache_stats_t stats;
+// };
+
+// TODO rename to dram_interface??
+// TODO or controller_interface?
+typedef struct tag_cache_interface_t tag_cache_interface_t;
+struct tag_cache_interface_t
 {
-    // TODO
-    // cache_line_t * entries; // NOTE won't store tag in them
+	gzFile output;
     u32 tags_size;
     u8 * tags; // NOTE tag controller's view of memory
-    tag_cache_stats_t stats;
+    tag_cache_interface_stats_t stats;
 };
 
 enum device_type_t
 {
     DEVICE_TYPE_CACHE,
-    DEVICE_TYPE_TAG_CACHE // TODO if we do actual tag cache simulation elsewhere, could rename to _INTERFACE?
+    DEVICE_TYPE_TAG_CACHE_INTERFACE
+    // DEVICE_TYPE_TAG_CACHE // TODO
     // TODO memory device as well?
 };
 
@@ -86,17 +101,19 @@ struct device_t
     union
     {
         cache_t cache;
-        tag_cache_t tag_cache;
+        // tag_cache_t tag_cache;
+        tag_cache_interface_t tag_cache_interface;
     };
 };
 
 cache_line_t * cache_lookup(device_t * device, u64 paddr);
 device_t cache_init(arena_t * arena, const char * name, u32 size, u32 num_ways, device_t * parent);
 
-device_t tag_cache_init(arena_t * arena);
+device_t tag_cache_init(arena_t * arena, char * initial_tags_filename);
+device_t tag_cache_interface_init(arena_t * arena, char * initial_tags_filename, char * output_filename);
 
 void device_print_configuration(device_t * device);
 void device_print_statistics(device_t * device);
-// void device_cleanup(device_t * device);
+void device_cleanup(device_t * device);
 
 #endif /* SIMULATOR_INCLUDE */

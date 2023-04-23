@@ -114,34 +114,34 @@ static void update_trace_stats(trace_stats_t * stats, custom_trace_entry_t entry
 static void print_trace_stats(trace_stats_t * stats)
 {
     printf("Statistics:\n");
-    printf("\tTotal entries: %lu\n", stats->num_entries);
-    printf("\tTotal entries without paddr: %lu\n", stats->num_entries_no_paddr);
-    printf("\tTotal entries with invalid paddr: %lu\n", stats->num_entries_invalid_paddr);
+    printf(INDENT4 "Total entries: %lu\n", stats->num_entries);
+    printf(INDENT4 "Total entries without paddr: %lu\n", stats->num_entries_no_paddr);
+    printf(INDENT4 "Total entries with invalid paddr: %lu\n", stats->num_entries_invalid_paddr);
     printf("\n");
-    printf("\tTotal entries where paddr == vaddr: %ld\n", stats->num_entries_paddr_matches_vaddr);
-    printf("\tTotal entries where invalid paddr == vaddr: %ld\n", stats->num_entries_invalid_paddr_matches_vaddr);
+    printf(INDENT4 "Total entries where paddr == vaddr: %ld\n", stats->num_entries_paddr_matches_vaddr);
+    printf(INDENT4 "Total entries where invalid paddr == vaddr: %ld\n", stats->num_entries_invalid_paddr_matches_vaddr);
     printf("\n");
-    printf("\tInstructions: %lu\n", stats->num_instructions);
-    printf("\tInstructions without paddr: %lu\n", stats->num_instructions_no_paddr);
-    printf("\tInstructions with invalid paddr: %lu\n", stats->num_instructions_invalid_paddr);
+    printf(INDENT4 "Instructions: %lu\n", stats->num_instructions);
+    printf(INDENT4 "Instructions without paddr: %lu\n", stats->num_instructions_no_paddr);
+    printf(INDENT4 "Instructions with invalid paddr: %lu\n", stats->num_instructions_invalid_paddr);
     printf("\n");
-    printf("\tTotal memory accesses: %lu\n", stats->num_mem_accesses);
+    printf(INDENT4 "Total memory accesses: %lu\n", stats->num_mem_accesses);
     printf("\n");
-    printf("\tLOADs: %lu\n", stats->num_LOADs);
-    printf("\tLOADs without paddr: %lu\n", stats->num_LOADs_no_paddr);
-    printf("\tLOADs with invalid paddr: %lu\n", stats->num_LOADs_invalid_paddr);
+    printf(INDENT4 "LOADs: %lu\n", stats->num_LOADs);
+    printf(INDENT4 "LOADs without paddr: %lu\n", stats->num_LOADs_no_paddr);
+    printf(INDENT4 "LOADs with invalid paddr: %lu\n", stats->num_LOADs_invalid_paddr);
     printf("\n");
-    printf("\tSTOREs: %lu\n", stats->num_STOREs);
-    printf("\tSTOREs without paddr: %lu\n", stats->num_STOREs_no_paddr);
-    printf("\tSTOREs with invalid paddr: %lu\n", stats->num_STOREs_invalid_paddr);
+    printf(INDENT4 "STOREs: %lu\n", stats->num_STOREs);
+    printf(INDENT4 "STOREs without paddr: %lu\n", stats->num_STOREs_no_paddr);
+    printf(INDENT4 "STOREs with invalid paddr: %lu\n", stats->num_STOREs_invalid_paddr);
     printf("\n");
-    printf("\tCLOADs: %lu\n", stats->num_CLOADs);
-    printf("\tCLOADs without paddr: %lu\n", stats->num_CLOADs_no_paddr);
-    printf("\tCLOADs with invalid paddr: %lu\n", stats->num_CLOADs_invalid_paddr);
+    printf(INDENT4 "CLOADs: %lu\n", stats->num_CLOADs);
+    printf(INDENT4 "CLOADs without paddr: %lu\n", stats->num_CLOADs_no_paddr);
+    printf(INDENT4 "CLOADs with invalid paddr: %lu\n", stats->num_CLOADs_invalid_paddr);
     printf("\n");
-    printf("\tCSTOREs: %lu\n", stats->num_CSTOREs);
-    printf("\tCSTOREs without paddr: %lu\n", stats->num_CSTOREs_no_paddr);
-    printf("\tCSTOREs with invalid paddr: %lu\n", stats->num_CSTOREs_invalid_paddr);
+    printf(INDENT4 "CSTOREs: %lu\n", stats->num_CSTOREs);
+    printf(INDENT4 "CSTOREs without paddr: %lu\n", stats->num_CSTOREs_no_paddr);
+    printf(INDENT4 "CSTOREs with invalid paddr: %lu\n", stats->num_CSTOREs_invalid_paddr);
 }
 
 // static const char * get_type_string(u8 type)
@@ -167,13 +167,6 @@ static void print_trace_stats(trace_stats_t * stats)
 //     printf("%s [ vaddr: " FMT_ADDR ", paddr: " FMT_ADDR ", size: %hu ]\n",
 //         get_type_string(entry.type), entry.vaddr, entry.paddr, entry.size);
 // }
-
-static bool file_exists(char * filename)
-{
-    FILE * fd = fopen(filename, "rb");
-    if (fd) fclose(fd);
-    return fd != NULL;
-}
 
 static bool gz_at_eof(int bytes_read, int expected_bytes)
 {
@@ -253,6 +246,7 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
 
     if (file_exists(output_filename))
     {
+        // TODO ask for confirmation instead?
         printf("ERROR: Attempted to overwrite existing file \"%s\".\n", output_filename);
         quit();
     }
@@ -372,6 +366,7 @@ void trace_convert_drcachesim(COMMAND_HANDLER_ARGS)
 
     if (file_exists(output_trace_filename))
     {
+        // TODO ask for confirmation instead?
         printf("ERROR: Attempted to overwrite existing file \"%s\".\n", output_trace_filename);
         quit();
     }
@@ -413,6 +408,7 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
 
     if (file_exists(initial_tags_filename))
     {
+        // TODO ask for confirmation instead?
         printf("ERROR: Attempted to overwrite existing file \"%s\".\n", initial_tags_filename);
         quit();
     }
@@ -602,23 +598,18 @@ static inline u8 get_tag_idx(u64 cache_line_addr, u64 cap_addr)
 
 void trace_simulate(COMMAND_HANDLER_ARGS)
 {
-    if (num_args != 2)
+    if (num_args != 3)
     {
-        printf("Usage: %s %s <trace file> <initial state>\n", exe_name, cmd_name);
+        printf("Usage: %s %s <trace file> <initial state> <output file>\n", exe_name, cmd_name);
         quit();
     }
 
     char * input_trace_filename = args[0];
     char * initial_tags_filename = args[1];
+    char * output_requests_filename = args[2];
 
-    // TODO
-    gzFile input_trace_file = gzopen(input_trace_filename, "rb");
-    FILE * initial_tags_file = fopen(initial_tags_filename, "rb");
-
-
-    device_t tag_controller = tag_cache_init(arena); // TODO , KILOBYTES(32), 4, NULL);
-    size_t bytes_read = fread(tag_controller.tag_cache.tags, sizeof(u8), tag_controller.tag_cache.tags_size, initial_tags_file);
-    assert(bytes_read == tag_controller.tag_cache.tags_size);
+    // device_t tag_controller = tag_cache_init(arena, initial_tags_filename); // TODO , KILOBYTES(32), 4, NULL);
+    device_t tag_controller = tag_cache_interface_init(arena, initial_tags_filename, output_requests_filename);
 
     device_t l2_cache = cache_init(arena, "L2", KILOBYTES(512), 16, &tag_controller);
 
@@ -641,6 +632,8 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
         device_print_configuration(all_devices[i]);
     }
     printf("\n");
+
+    gzFile input_trace_file = gzopen(input_trace_filename, "rb");
 
     while (true)
     {
@@ -727,10 +720,10 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
     }
     printf("\n");
 
-    // for (i64 i = 0; i < array_count(all_devices); i++)
-    // {
-    //     device_cleanup(&all_devices[i]);
-    // }
+    for (i64 i = 0; i < num_devices; i++)
+    {
+        device_cleanup(all_devices[i]);
+    }
 
     // TODO intialise leaf tag table from initial tag state file
     // TODO initialise root tag table from the leaf tag table
