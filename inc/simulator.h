@@ -108,7 +108,7 @@ struct device_t
 };
 
 cache_line_t * cache_request(device_t * device, u64 paddr);
-device_t * cache_init(arena_t * arena, const char * name, u32 size, u32 num_ways, device_t * parent);
+device_t * cache_init(arena_t * arena, char * name, u32 size, u32 num_ways, device_t * parent);
 
 // device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename);
 device_t * controller_interface_init(arena_t * arena, char * initial_tags_filename, char * output_filename);

@@ -141,7 +141,7 @@ static void print_trace_stats(trace_stats_t * stats)
     printf(INDENT4 "CSTOREs with invalid paddr: %lu\n", stats->num_CSTOREs_invalid_paddr);
 }
 
-// static const char * get_type_string(u8 type)
+// static char * get_type_string(u8 type)
 // {
 //     switch (type)
 //     {

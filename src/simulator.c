@@ -23,7 +23,7 @@ static void get_initial_tags(char * initial_tags_filename, u32 tags_buffer_size,
 /*
 device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename)
 {
-    device_t * device = (device_t *) arena_push(arena, sizeof(device_t)); // TODO remove C++?
+    device_t * device = arena_push(arena, sizeof(device_t));
     *device = (device_t) {0};
     device->type = DEVICE_TYPE_TAG_CACHE;
 
@@ -39,7 +39,7 @@ device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename)
 
 device_t * controller_interface_init(arena_t * arena, char * initial_tags_filename, char * output_filename)
 {
-    device_t * device = (device_t *) arena_push(arena, sizeof(device_t)); // TODO remove C++?
+    device_t * device = arena_push(arena, sizeof(device_t));
     *device = (device_t) {0};
     device->type = DEVICE_TYPE_CONTROLLER_INTERFACE;
 
@@ -166,11 +166,10 @@ static b8 device_read(device_t * device, u64 paddr)
 }
 
 
-/* TODO if you get rid of C++, review uses of const */
-device_t * cache_init(arena_t * arena, const char * name, u32 size, u32 num_ways, device_t * parent)
+device_t * cache_init(arena_t * arena, char * name, u32 size, u32 num_ways, device_t * parent)
 {
     // TODO
-    device_t * device = (device_t *) arena_push(arena, sizeof(device_t)); // TODO get rid of C++?
+    device_t * device = arena_push(arena, sizeof(device_t));
     *device = (device_t) {0};
     device->type = DEVICE_TYPE_CACHE;
 
@@ -194,7 +193,7 @@ device_t * cache_init(arena_t * arena, const char * name, u32 size, u32 num_ways
     }
 
     assert(name);
-    device->cache.name = (char *) name; // TODO get rid of C++?
+    device->cache.name = name;
 
     return device;
 }
@@ -469,11 +468,11 @@ static char * device_get_name(device_t * device)
         } break;
         // case DEVICE_TYPE_TAG_CACHE:
         // {
-        //     return (char *) "TAG CONTROLLER"; // TODO get rid of C++?
+        //     return "TAG CONTROLLER";
         // } break;
         case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
-            return (char *) "TAG CONTROLLER (INTERFACE)"; // TODO get rid of C++?
+            return "TAG CONTROLLER (INTERFACE)";
         } break;
         default: assert(!"Impossible.");
     }
