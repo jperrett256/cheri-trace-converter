@@ -86,9 +86,8 @@ struct controller_interface_t
 enum device_type_t
 {
     DEVICE_TYPE_CACHE,
-    DEVICE_TYPE_CONTROLLER_INTERFACE
     // DEVICE_TYPE_TAG_CACHE // TODO
-    // TODO memory device as well?
+    DEVICE_TYPE_CONTROLLER_INTERFACE
 };
 
 typedef struct device_t device_t;

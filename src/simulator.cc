@@ -10,7 +10,7 @@
 // TODO alternatively, could output requests to tag cache, and run the tag cache simulation in a separate pass (might massively save time)
 // TODO should definitely try lz4
 
-static void fill_initial_tags(char * initial_tags_filename, u32 tags_buffer_size, u8 * tags_buffer)
+static void get_initial_tags(char * initial_tags_filename, u32 tags_buffer_size, u8 * tags_buffer)
 {
     FILE * initial_tags_file = fopen(initial_tags_filename, "rb");
     assert(initial_tags_file); // TODO error instead?
@@ -28,7 +28,7 @@ device_t tag_cache_init(arena_t * arena, char * initial_tags_filename)
 
     device.tag_cache.tags_size = MEMORY_SIZE / CAP_SIZE_BYTES / 8;
     device.tag_cache.tags = arena_push_array(arena, u8, device.tag_cache.tags_size);
-    fill_initial_tags(initial_tags_filename, device.tag_cache.tags_size, device.tag_cache.tags);
+    get_initial_tags(initial_tags_filename, device.tag_cache.tags_size, device.tag_cache.tags);
 
     // TODO
 
@@ -44,14 +44,12 @@ device_t controller_interface_init(arena_t * arena, char * initial_tags_filename
     // TODO move these two lines into the fill_initial_tags function as well?
     device.controller_interface.tags_size = MEMORY_SIZE / CAP_SIZE_BYTES / 8;
     device.controller_interface.tags = arena_push_array(arena, u8, device.controller_interface.tags_size);
-    fill_initial_tags(initial_tags_filename, device.controller_interface.tags_size, device.controller_interface.tags);
+    get_initial_tags(initial_tags_filename, device.controller_interface.tags_size, device.controller_interface.tags);
 
     assert(output_filename);
     if (file_exists(output_filename))
     {
-        // TODO ask for confirmation instead?
-        printf("ERROR: Attempted to overwrite existing file \"%s\".\n", output_filename);
-        quit();
+        if (!confirm_overwrite_file(output_filename)) quit();
     }
 
     device.controller_interface.output = gzopen(output_filename, "wb");

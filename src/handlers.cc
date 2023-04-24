@@ -246,7 +246,6 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
 
     if (file_exists(output_filename))
     {
-        // TODO ask for confirmation instead?
         printf("ERROR: Attempted to overwrite existing file \"%s\".\n", output_filename);
         quit();
     }
@@ -366,7 +365,6 @@ void trace_convert_drcachesim(COMMAND_HANDLER_ARGS)
 
     if (file_exists(output_trace_filename))
     {
-        // TODO ask for confirmation instead?
         printf("ERROR: Attempted to overwrite existing file \"%s\".\n", output_trace_filename);
         quit();
     }
@@ -408,7 +406,6 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
 
     if (file_exists(initial_tags_filename))
     {
-        // TODO ask for confirmation instead?
         printf("ERROR: Attempted to overwrite existing file \"%s\".\n", initial_tags_filename);
         quit();
     }
