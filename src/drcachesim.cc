@@ -1,10 +1,14 @@
 #include <zlib.h>
 #include <assert.h>
 
-#include "trace.h"
+extern "C"
+{
+    #include "trace.h"
+}
+
 #include "dynamorio/clients/drcachesim/common/trace_entry.h"
 
-void write_drcachesim_header(gzFile file)
+extern "C" void write_drcachesim_header(gzFile file)
 {
     assert(file);
 
@@ -39,7 +43,7 @@ void write_drcachesim_header(gzFile file)
     gzwrite(file, &cpuid, sizeof(cpuid));
 }
 
-void write_drcachesim_trace_entry(gzFile file, custom_trace_entry_t custom_entry)
+extern "C" void write_drcachesim_trace_entry(gzFile file, custom_trace_entry_t custom_entry)
 {
     assert(file);
 
@@ -71,7 +75,7 @@ void write_drcachesim_trace_entry(gzFile file, custom_trace_entry_t custom_entry
     gzwrite(file, &drcachesim_entry, sizeof(drcachesim_entry));
 }
 
-void write_drcachesim_footer(gzFile file)
+extern "C" void write_drcachesim_footer(gzFile file)
 {
     assert(file);
 

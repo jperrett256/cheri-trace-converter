@@ -24,7 +24,7 @@ static void get_initial_tags(char * initial_tags_filename, u32 tags_buffer_size,
 device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename)
 {
     device_t * device = (device_t *) arena_push(arena, sizeof(device_t)); // TODO remove C++?
-    *device = {0};
+    *device = (device_t) {0};
     device->type = DEVICE_TYPE_TAG_CACHE;
 
     device->tag_cache.tags_size = MEMORY_SIZE / CAP_SIZE_BYTES / 8;
@@ -40,7 +40,7 @@ device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename)
 device_t * controller_interface_init(arena_t * arena, char * initial_tags_filename, char * output_filename)
 {
     device_t * device = (device_t *) arena_push(arena, sizeof(device_t)); // TODO remove C++?
-    *device = {0};
+    *device = (device_t) {0};
     device->type = DEVICE_TYPE_CONTROLLER_INTERFACE;
 
     device->controller_interface.tags_size = MEMORY_SIZE / CAP_SIZE_BYTES / 8;
@@ -171,7 +171,7 @@ device_t * cache_init(arena_t * arena, const char * name, u32 size, u32 num_ways
 {
     // TODO
     device_t * device = (device_t *) arena_push(arena, sizeof(device_t)); // TODO get rid of C++?
-    *device = {0};
+    *device = (device_t) {0};
     device->type = DEVICE_TYPE_CACHE;
 
     assert(parent);

@@ -17,4 +17,12 @@ static inline bool check_paddr_valid(u64 paddr)
 #define INDENT4 "    "
 #define INDENT8 INDENT4 INDENT4
 
+// #ifdef __cplusplus
+// #define EXTERN_C extern "C" {
+// #define EXTERN_C_END }
+// #else
+// #define EXTERN_C
+// #define EXTERN_C_END
+// #endif
+
 #endif /* COMMON_INCLUDE */

@@ -3,6 +3,7 @@
 #include "utils.h"
 #include "common.h"
 #include "handlers.h"
+#include "hashmap.h"
 #include "drcachesim.h"
 #include "simulator.h"
 
@@ -11,10 +12,6 @@
 #include <inttypes.h>
 
 #define FMT_ADDR "%016" PRIx64
-
-// TODO get rid of C++?
-#include <unordered_map>
-#include <unordered_set>
 
 
 typedef struct trace_stats_t trace_stats_t;
@@ -256,9 +253,9 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
     gzFile output_trace_file = gzopen(output_filename, "wb");
     assert(output_trace_file);
 
-    std::unordered_map<u64, u64> page_table;
-    std::unordered_set<u64> dbg_pages_changed_mapping;
-    std::unordered_set<u64> dbg_pages_without_mapping;
+    map_u64 page_table = map_u64_create();
+    set_u64 dbg_pages_changed_mapping = set_u64_create();
+    set_u64 dbg_pages_without_mapping = set_u64_create();
 
     trace_stats_t global_stats_before = {0};
     trace_stats_t global_stats_after = {0};
@@ -283,45 +280,32 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
 
         if (check_paddr_valid(paddr))
         {
-            auto table_entry = page_table.find(get_page_start(vaddr));
-            if (table_entry != page_table.end())
+            u64 paddr_page;
+            if (map_u64_get(page_table, get_page_start(vaddr), &paddr_page))
             {
-                u64 paddr_page = table_entry->second;
                 // TODO why is virtual-physical mapping changing during execution (userspace traces)?
                 if (paddr_page != get_page_start(paddr))
                 {
                     dbg_num_addr_mapping_changes++;
-                    dbg_pages_changed_mapping.insert(get_page_start(vaddr));
-
-                    // TODO seems that some instruction pages are being swapped in and out repeatedly
-                    // printf("WARNING: page table mapping changed at instruction %lu.\n",
-                    //     global_stats_before.num_instructions);
-                    // printf(
-                    //     "vaddr: " FMT_ADDR ", old paddr page: " FMT_ADDR
-                    //     ", new paddr page: " FMT_ADDR ", type: %s\n",
-                    //     vaddr, paddr_page, get_page_start(paddr), get_type_string(current_entry.type));
+                    set_u64_insert(dbg_pages_changed_mapping, get_page_start(vaddr));
                 }
-                // assert(paddr_page == get_page_start(paddr));
             }
 
-            page_table[get_page_start(vaddr)] = get_page_start(paddr);
+            map_u64_set(page_table, get_page_start(vaddr), get_page_start(paddr));
         }
         else
         {
-            auto table_entry = page_table.find(get_page_start(vaddr));
-            if (table_entry != page_table.end())
+            u64 paddr_page;
+            if (map_u64_get(page_table, get_page_start(vaddr), &paddr_page))
             {
-                u64 paddr_page = table_entry->second;
                 assert(paddr_page);
 
                 current_entry.paddr = paddr_page + (vaddr - get_page_start(vaddr));
-                // printf("vaddr is: " FMT_ADDR ", set paddr to: " FMT_ADDR "\n",
-                //     current_entry.vaddr, current_entry.paddr);
             }
             else
             {
                 // NOTE to see how many pages the entries without valid mappings correspond to
-                dbg_pages_without_mapping.insert(get_page_start(vaddr));
+                set_u64_insert(dbg_pages_without_mapping, get_page_start(vaddr));
             }
         }
 
@@ -340,11 +324,15 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
     printf("\n");
 
     printf("Mapping changes: %lu\n", dbg_num_addr_mapping_changes);
-    printf("Pages with mapping changes: %lu\n", (u64) dbg_pages_changed_mapping.size());
-    printf("Pages without paddr mappings: %lu\n", (u64) dbg_pages_without_mapping.size());
+    printf("Pages with mapping changes: %lu\n", set_u64_size(dbg_pages_changed_mapping));
+    printf("Pages without paddr mappings: %lu\n", set_u64_size(dbg_pages_without_mapping));
 
     gzclose(input_trace_file);
     gzclose(output_trace_file);
+
+    map_u64_cleanup(&page_table);
+    set_u64_cleanup(&dbg_pages_changed_mapping);
+    set_u64_cleanup(&dbg_pages_without_mapping);
 }
 
 void trace_convert(COMMAND_HANDLER_ARGS)
@@ -429,12 +417,12 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
      *        that would imply that other programs can affect the caching of this program. Side-channel concerns?
      */
 
-    std::unordered_set<u64> initialized_tags; // all keys should be CAP_SIZE_BITS aligned
-    std::unordered_set<u64> dbg_modified_tags; // keep track of which tags do not match initial tag state
+    set_u64 initialized_tags = set_u64_create(); // all keys should be CAP_SIZE_BITS aligned
+    set_u64 dbg_modified_tags = set_u64_create(); // keep track of which tags do not match initial tag state
 
-    std::unordered_set<u64> initialized_tags_INSTRs;
-    std::unordered_set<u64> initialized_tags_LOADs;
-    std::unordered_set<u64> initialized_tags_CLOADs;
+    set_u64 initialized_tags_INSTRs = set_u64_create();
+    set_u64 initialized_tags_LOADs = set_u64_create();
+    set_u64 initialized_tags_CLOADs = set_u64_create();
 
     i64 dbg_paddrs_missing = 0;
     i64 dbg_paddrs_invalid = 0;
@@ -475,32 +463,32 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
             i8 tag_entry_bit = mem_offset / CAP_SIZE_BYTES % 8;
             assert(tag_table_idx >= 0 && tag_table_idx < tag_table_size);
 
-            bool already_found_first_access = initialized_tags.find(paddr) != initialized_tags.end();
+            bool already_found_first_access = set_u64_contains(initialized_tags, paddr);
             if (!already_found_first_access)
             {
                 switch (current_entry.type)
                 {
                     case CUSTOM_TRACE_TYPE_INSTR:
                     {
-                        initialized_tags_INSTRs.insert(paddr);
+                        set_u64_insert(initialized_tags_INSTRs, paddr);
                         assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) == 0);
                         // NOTE assuming tag is 0, leaving as initialised
                     } break;
                     case CUSTOM_TRACE_TYPE_LOAD:
                     {
-                        initialized_tags_LOADs.insert(paddr);
+                        set_u64_insert(initialized_tags_LOADs, paddr);
                         // NOTE assuming tag is 0, leaving as initialised
                         assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) == 0);
                     } break;
                     case CUSTOM_TRACE_TYPE_STORE:
                     {
-                        dbg_modified_tags.insert(paddr);
+                        set_u64_insert(dbg_modified_tags, paddr);
                         // NOTE assuming tag before store is 0, leaving as initialised
                         assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) == 0);
                     } break;
                     case CUSTOM_TRACE_TYPE_CLOAD:
                     {
-                        initialized_tags_CLOADs.insert(paddr);
+                        set_u64_insert(initialized_tags_CLOADs, paddr);
                         assert(paddr == current_entry.paddr && "Unaligned CLOAD.");
                         if (current_entry.tag) // TODO get rid of branch?
                         {
@@ -511,7 +499,7 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
                     } break;
                     case CUSTOM_TRACE_TYPE_CSTORE:
                     {
-                        dbg_modified_tags.insert(paddr);
+                        set_u64_insert(dbg_modified_tags, paddr);
                         assert(paddr == current_entry.paddr && "Unaligned CSTORE.");
                         // NOTE assuming tag is 1
                         /* TODO does this actually affect caching behaviour?
@@ -523,17 +511,17 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
                     default: assert(!"Impossible.");
                 }
 
-                initialized_tags.insert(paddr);
+                set_u64_insert(initialized_tags, paddr);
             }
             else
             {
                 if (current_entry.type == CUSTOM_TRACE_TYPE_STORE || current_entry.type == CUSTOM_TRACE_TYPE_CSTORE)
                 {
-                    dbg_modified_tags.insert(paddr);
+                    set_u64_insert(dbg_modified_tags, paddr);
                 }
                 else if (current_entry.type == CUSTOM_TRACE_TYPE_CLOAD)
                 {
-                    bool was_modified_since_init = dbg_modified_tags.find(paddr) != dbg_modified_tags.end();
+                    bool was_modified_since_init = set_u64_contains(dbg_modified_tags, paddr);
                     if (!was_modified_since_init)
                     {
                         bool recorded_tag_value = (initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) != 0;
@@ -541,11 +529,11 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
                         {
                             // NOTE the LOADs are the main one I'm worried about (LOADs followed by a CLOAD reading a 1 for the tag)
 
-                            if (initialized_tags_INSTRs.find(paddr) != initialized_tags_INSTRs.end())
+                            if (set_u64_contains(initialized_tags_INSTRs, paddr))
                                 dbg_assumed_tag_incorrect_INSTRs++;
-                            else if (initialized_tags_LOADs.find(paddr) != initialized_tags_LOADs.end())
+                            else if (set_u64_contains(initialized_tags_LOADs, paddr))
                                 dbg_assumed_tag_incorrect_LOADs++;
-                            else if (initialized_tags_CLOADs.find(paddr) != initialized_tags_CLOADs.end())
+                            else if (set_u64_contains(initialized_tags_CLOADs, paddr))
                                 dbg_assumed_tag_incorrect_CLOADs++;
                             else
                                 assert(!"Impossible");
@@ -578,6 +566,12 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
         - Does this actually affect caching behaviour? If you are setting the entire cache line, do you even need to read from memory/cache first?
           (can you not just update/create an entry in L1 and be done with it?) *QUESTION*
      */
+
+    set_u64_cleanup(&initialized_tags);
+    set_u64_cleanup(&dbg_modified_tags);
+    set_u64_cleanup(&initialized_tags_INSTRs);
+    set_u64_cleanup(&initialized_tags_LOADs);
+    set_u64_cleanup(&initialized_tags_CLOADs);
 }
 
 
