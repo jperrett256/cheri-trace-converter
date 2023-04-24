@@ -606,19 +606,20 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
     char * output_requests_filename = args[2];
 
     // device_t tag_controller = tag_cache_init(arena, initial_tags_filename); // TODO , KILOBYTES(32), 4, NULL);
-    device_t tag_controller = controller_interface_init(arena, initial_tags_filename, output_requests_filename);
+    device_t * tag_controller = controller_interface_init(arena, initial_tags_filename, output_requests_filename);
 
-    device_t l2_cache = cache_init(arena, "L2", KILOBYTES(512), 16, &tag_controller);
+    device_t * l2_cache = cache_init(arena, "L2", 4096, 8, tag_controller);
 
-    device_t l1_instr_cache = cache_init(arena, "L1I", KILOBYTES(48), 4, &l2_cache);
-    device_t l1_data_cache = cache_init(arena, "L1D", KILOBYTES(32), 4, &l2_cache);
+    device_t * l1_instr_cache = cache_init(arena, "L1I", 512, 4, l2_cache);
+    device_t * l1_data_cache = cache_init(arena, "L1D", 512, 4, l2_cache);
+    assert(l2_cache->num_children == 2);
 
     device_t * all_devices[] =
     {
-        &l1_instr_cache,
-        &l1_data_cache,
-        &l2_cache,
-        &tag_controller
+        l1_instr_cache,
+        l1_data_cache,
+        l2_cache,
+        tag_controller
     };
     assert(array_count(all_devices) <= UINT32_MAX);
     u32 num_devices = array_count(all_devices);
@@ -660,7 +661,7 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
 
             if (current_entry.type == CUSTOM_TRACE_TYPE_INSTR)
             {
-                cache_line_t * cache_line = cache_request(&l1_instr_cache, paddr);
+                cache_line_t * cache_line = cache_request(l1_instr_cache, paddr);
 
                 assert(current_entry.tag == 0);
 
@@ -674,7 +675,7 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
             }
             else
             {
-                cache_line_t * cache_line = cache_request(&l1_data_cache, paddr);
+                cache_line_t * cache_line = cache_request(l1_data_cache, paddr);
 
                 switch (current_entry.type)
                 {
@@ -690,7 +691,7 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
                     case CUSTOM_TRACE_TYPE_STORE:
                     case CUSTOM_TRACE_TYPE_CSTORE:
                     {
-                        cache_line->dirty = true;
+                        cache_line->dirty = true; // TODO do we check if the data actually changed?
 
                         assert(current_entry.type != CUSTOM_TRACE_TYPE_STORE || current_entry.tag == 0);
                         for (u64 paddr_cap = start_addr_cap; paddr_cap < end_addr_cap; paddr_cap += CAP_SIZE_BYTES)

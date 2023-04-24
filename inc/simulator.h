@@ -24,6 +24,7 @@ struct cache_stats_t
 {
 	u64 hits;
 	u64 misses;
+    u64 invalidations;
 	// TODO types of misses?
 	// TODO prefetcher?
 };
@@ -58,7 +59,6 @@ struct cache_t
 {
     u32 size;
     u32 num_ways;
-    cache_t * parent;
     cache_line_t * entries;
     cache_stats_t stats;
     char * name;
@@ -90,6 +90,8 @@ enum device_type_t
     DEVICE_TYPE_CONTROLLER_INTERFACE
 };
 
+#define DEVICE_MAX_CHILDREN 2
+
 typedef struct device_t device_t;
 struct device_t
 {
@@ -101,13 +103,15 @@ struct device_t
         // tag_cache_t tag_cache;
         controller_interface_t controller_interface;
     };
+    device_t * children[DEVICE_MAX_CHILDREN];
+    u32 num_children;
 };
 
 cache_line_t * cache_request(device_t * device, u64 paddr);
-device_t cache_init(arena_t * arena, const char * name, u32 size, u32 num_ways, device_t * parent);
+device_t * cache_init(arena_t * arena, const char * name, u32 size, u32 num_ways, device_t * parent);
 
-device_t tag_cache_init(arena_t * arena, char * initial_tags_filename);
-device_t controller_interface_init(arena_t * arena, char * initial_tags_filename, char * output_filename);
+// device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename);
+device_t * controller_interface_init(arena_t * arena, char * initial_tags_filename, char * output_filename);
 
 void device_print_configuration(device_t * device);
 void device_print_statistics(device_t * device);

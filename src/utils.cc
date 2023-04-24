@@ -25,7 +25,7 @@ bool confirm_overwrite_file(char * filename)
     bool result = false;
     while (true)
     {
-        printf("Overwrite existing file \"%s\"? [y/N] ", filename);
+        fprintf(stderr, "Overwrite existing file \"%s\"? [y/N] ", filename);
         int c = fgetc(stdin);
         result = (c == 'y' || c == 'Y');
 
