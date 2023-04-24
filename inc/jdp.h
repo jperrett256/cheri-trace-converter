@@ -39,16 +39,16 @@ typedef double      f64;
 #define align_floor_pow_2(x, b)     ((x) & (~((b) - 1)))
 #define align_ceil_pow_2(x, b)      (((x) + ((b) - 1)) & (~((b) - 1)))
 
-#if !defined(static_assert)
- #if defined _Static_assert
-    #define static_assert _Static_assert
- #elif defined __GNUC__ && ( __GNUC__ > 4 || __GNUC__ == 4 && defined __GNUC_MINOR__ && __GNUC_MINOR >= 6)
-    #define static_assert _Static_assert
- #endif
-#endif
-
 #define ARENA_COMMIT_SIZE       KILOBYTES(64)
 #define COMMON_TEMP_BUF_LEN    	KILOBYTES(8)
+
+#if !defined(__cplusplus) && !defined(static_assert)
+ #if defined _Static_assert
+  #define static_assert _Static_assert
+ #elif defined __GNUC__ && ( __GNUC__ > 4 || __GNUC__ == 4 && defined __GNUC_MINOR__ && __GNUC_MINOR >= 6)
+  #define static_assert _Static_assert
+ #endif
+#endif
 
 #if JDP_OS_WINDOWS
  #include <windows.h>
