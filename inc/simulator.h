@@ -50,7 +50,7 @@ struct cache_line_t
     u64 tag_addr;
     u16 counter;
     b8 tags_cheri; // TODO make 16 bits?
-    // bool dirty; // TODO
+    bool dirty;
 };
 
 typedef struct cache_t cache_t;
@@ -103,7 +103,7 @@ struct device_t
     };
 };
 
-cache_line_t * cache_lookup(device_t * device, u64 paddr);
+cache_line_t * cache_request(device_t * device, u64 paddr);
 device_t cache_init(arena_t * arena, const char * name, u32 size, u32 num_ways, device_t * parent);
 
 device_t tag_cache_init(arena_t * arena, char * initial_tags_filename);

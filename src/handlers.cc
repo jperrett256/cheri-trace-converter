@@ -660,9 +660,11 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
 
             if (current_entry.type == CUSTOM_TRACE_TYPE_INSTR)
             {
-                cache_line_t * cache_line = cache_lookup(&l1_instr_cache, paddr);
+                cache_line_t * cache_line = cache_request(&l1_instr_cache, paddr);
 
                 assert(current_entry.tag == 0);
+
+                assert(cache_line->dirty == false);
 
                 for (u64 paddr_cap = start_addr_cap; paddr_cap < end_addr_cap; paddr_cap += CAP_SIZE_BYTES)
                 {
@@ -672,7 +674,7 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
             }
             else
             {
-                cache_line_t * cache_line = cache_lookup(&l1_data_cache, paddr);
+                cache_line_t * cache_line = cache_request(&l1_data_cache, paddr);
 
                 switch (current_entry.type)
                 {
@@ -688,6 +690,8 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
                     case CUSTOM_TRACE_TYPE_STORE:
                     case CUSTOM_TRACE_TYPE_CSTORE:
                     {
+                        cache_line->dirty = true;
+
                         assert(current_entry.type != CUSTOM_TRACE_TYPE_STORE || current_entry.tag == 0);
                         for (u64 paddr_cap = start_addr_cap; paddr_cap < end_addr_cap; paddr_cap += CAP_SIZE_BYTES)
                         {

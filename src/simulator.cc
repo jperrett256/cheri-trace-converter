@@ -89,9 +89,9 @@ static void device_write(device_t * device, u64 paddr, b8 tags_cheri)
     {
         case DEVICE_TYPE_CACHE:
         {
-            cache_line_t * cache_line = cache_lookup(device, paddr);
+            cache_line_t * cache_line = cache_request(device, paddr);
             cache_line->tags_cheri = tags_cheri;
-            // TODO dirty bit?
+            cache_line->dirty = true;
         } break;
         case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
@@ -134,9 +134,8 @@ static b8 device_read(device_t * device, u64 paddr)
     {
         case DEVICE_TYPE_CACHE:
         {
-            cache_line_t * cache_line = cache_lookup(device, paddr);
+            cache_line_t * cache_line = cache_request(device, paddr);
             return cache_line->tags_cheri;
-            // TODO dirty bit?
         } break;
         case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
@@ -176,7 +175,7 @@ device_t cache_init(arena_t * arena, const char * name, u32 size, u32 num_ways, 
     device.cache.size = size;
     device.cache.num_ways = num_ways;
     assert(size % num_ways == 0);
-    // result.num_sets =
+
     device.cache.entries = arena_push_array(arena, cache_line_t, size);
     for (i64 i = 0; i < size; i++) device.cache.entries[i].tag_addr = INVALID_TAG;
 
@@ -186,17 +185,17 @@ device_t cache_init(arena_t * arena, const char * name, u32 size, u32 num_ways, 
     return device;
 }
 
-cache_line_t * cache_lookup(device_t * device, u64 paddr)
+static inline i64 cache_find_existing(device_t * device, u64 tag_addr, u32 * set_start_idx_ptr)
 {
     assert(device->type == DEVICE_TYPE_CACHE);
 
-    assert(paddr % CACHE_LINE_SIZE == 0);
-
-    u64 tag_addr = paddr >> CACHE_LINE_SIZE_BITS;
-    u32 num_sets = device->cache.size / device->cache.num_ways; // TODO calculate num_sets at init?
+    u32 num_sets = device->cache.size / device->cache.num_ways;
     u32 set_start_idx = (tag_addr % num_sets) * device->cache.num_ways;
 
     assert(tag_addr != INVALID_TAG);
+
+    assert(set_start_idx_ptr);
+    *set_start_idx_ptr = set_start_idx;
 
     i64 way = -1;
     for (i64 i = 0; i < device->cache.num_ways; i++)
@@ -207,6 +206,18 @@ cache_line_t * cache_lookup(device_t * device, u64 paddr)
             way = i;
         }
     }
+
+    return way;
+}
+
+cache_line_t * cache_request(device_t * device, u64 paddr)
+{
+    assert(device->type == DEVICE_TYPE_CACHE);
+    assert(paddr % CACHE_LINE_SIZE == 0);
+
+    u64 tag_addr = paddr >> CACHE_LINE_SIZE_BITS;
+    u32 set_start_idx;
+    i64 way = cache_find_existing(device, tag_addr, &set_start_idx);
 
     cache_line_t * result = NULL;
     if (way >= 0)
@@ -243,11 +254,67 @@ cache_line_t * cache_lookup(device_t * device, u64 paddr)
         assert(device->parent != NULL);
 
         cache_line_t * line_to_replace = &device->cache.entries[set_start_idx + way];
-        // evict if necessary
-        if (line_to_replace->tag_addr != INVALID_TAG) // TODO dirty bit?
+
+        if (line_to_replace->tag_addr != INVALID_TAG)
         {
-            // TODO should definitely be in next level cache already when writing-back (somehow assert?)
-            device_write(device->parent, paddr, line_to_replace->tags_cheri);
+            // evict if necessary
+            if (line_to_replace->dirty)
+            {
+                /* TODO handle tag cache as well when we have that
+                 * could just switch to having an expect_hit flag for device_write/cache_lookup
+                 * (cache_lookup can avoid having flag, if the initial check for a hit is moved into another function?)
+                 */
+                // TODO can use cache_find_existing instead
+                u64 parent_prev_hits = UINT64_MAX;
+                u64 parent_prev_misses = UINT64_MAX;
+                if (device->parent->type == DEVICE_TYPE_CACHE)
+                {
+                    parent_prev_hits = device->parent->cache.stats.hits;
+                    parent_prev_misses = device->parent->cache.stats.misses;
+                }
+
+                device_write(device->parent, paddr, line_to_replace->tags_cheri);
+
+                if (device->parent->type == DEVICE_TYPE_CACHE)
+                {
+                    assert(parent_prev_hits != UINT64_MAX && parent_prev_misses != UINT64_MAX);
+
+                    // expect hit in next level cache already when writing-back
+                    assert(device->parent->cache.stats.hits == parent_prev_hits + 1);
+                    assert(device->parent->cache.stats.misses == parent_prev_misses);
+                }
+            }
+            else
+            {
+                // TODO handle tag cache as well when we have that
+                // TODO could create a utility function with a switch statement inside?
+                if (device->parent->type == DEVICE_TYPE_CACHE)
+                {
+                    // check tags match what we have in the next cache
+                    u32 set_start_idx;
+                    i64 way = cache_find_existing(device->parent, line_to_replace->tag_addr, &set_start_idx);
+                    assert(way >= 0);
+                    assert(device->parent->cache.entries[set_start_idx + way].tags_cheri == line_to_replace->tags_cheri);
+                }
+                else if (device->parent->type == DEVICE_TYPE_CONTROLLER_INTERFACE)
+                {
+                    // check tags match tag table
+
+                    // TODO we really need a utility function for getting the index
+                    u64 evicted_paddr = tag_addr << CACHE_LINE_SIZE_BITS;
+                    assert(evicted_paddr % CACHE_LINE_SIZE == 0);
+                    assert(evicted_paddr % CAP_SIZE_BYTES == 0);
+
+                    assert(CACHE_LINE_SIZE / CAP_SIZE_BYTES == 8); // TODO handle other cache line sizes
+
+                    assert(check_paddr_valid(evicted_paddr));
+                    u64 mem_offset = evicted_paddr - BASE_PADDR;
+                    i64 tag_table_idx = mem_offset / CAP_SIZE_BYTES / 8;
+                    assert(tag_table_idx >= 0 && tag_table_idx < device->parent->controller_interface.tags_size);
+
+                    assert(device->parent->controller_interface.tags[tag_table_idx] == line_to_replace->tags_cheri);
+                }
+            }
         }
 
         // forward read to next level cache
@@ -258,6 +325,7 @@ cache_line_t * cache_lookup(device_t * device, u64 paddr)
         // assert(CACHE_LINE_SIZE / CAP_SIZE_BYTES == 8 || ((~((1 << (CACHE_LINE_SIZE/CAP_SIZE_BYTES))-1) & tags_cheri) == 0));
         assert((~((1 << (CACHE_LINE_SIZE/CAP_SIZE_BYTES))-1) & tags_cheri) == 0);
 
+        line_to_replace->dirty = false;
         line_to_replace->tag_addr = tag_addr;
         line_to_replace->tags_cheri = tags_cheri;
 
@@ -308,15 +376,6 @@ cache_line_t * cache_lookup(device_t * device, u64 paddr)
     return result;
 }
 
-// // for the tag cache
-// typedef struct tag_cache_line_t tag_cache_line_t;
-// struct tag_cache_line_t
-// {
-//     u64 tag;
-//     u8 data[TAG_CACHE_GF/8];
-//     u32 counter;
-//     bool dirty;
-// };
 
 static char * device_get_name(device_t * device)
 {
