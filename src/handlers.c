@@ -602,10 +602,10 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
     // device_t tag_controller = tag_cache_init(arena, initial_tags_filename); // TODO , KILOBYTES(32), 4, NULL);
     device_t * tag_controller = controller_interface_init(arena, initial_tags_filename, output_requests_filename);
 
-    device_t * l2_cache = cache_init(arena, "L2", 4096, 8, tag_controller);
+    device_t * l2_cache = cache_init(arena, "L2", KILOBYTES(1024), 8, tag_controller);
 
-    device_t * l1_instr_cache = cache_init(arena, "L1I", 512, 4, l2_cache);
-    device_t * l1_data_cache = cache_init(arena, "L1D", 512, 4, l2_cache);
+    device_t * l1_instr_cache = cache_init(arena, "L1I", KILOBYTES(64), 4, l2_cache);
+    device_t * l1_data_cache = cache_init(arena, "L1D", KILOBYTES(64), 4, l2_cache);
     assert(l2_cache->num_children == 2);
 
     device_t * all_devices[] =
