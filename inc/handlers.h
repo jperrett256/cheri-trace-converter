@@ -11,5 +11,6 @@ void trace_convert(COMMAND_HANDLER_ARGS);
 void trace_convert_drcachesim(COMMAND_HANDLER_ARGS);
 void trace_get_initial_tags(COMMAND_HANDLER_ARGS);
 void trace_simulate(COMMAND_HANDLER_ARGS);
+void trace_simulate_uncompressed(COMMAND_HANDLER_ARGS);
 
 #endif /* HANDLERS_INCLUDE */

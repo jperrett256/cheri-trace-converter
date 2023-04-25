@@ -22,11 +22,19 @@ Crucial points:
 typedef struct cache_stats_t cache_stats_t;
 struct cache_stats_t
 {
+    u64 hits;
+    u64 misses;
+    u64 invalidations;
+    // TODO types of misses?
+    // TODO prefetcher?
+};
+
+typedef struct tag_cache_stats_t tag_cache_stats_t;
+struct tag_cache_stats_t
+{
 	u64 hits;
 	u64 misses;
-    u64 invalidations;
-	// TODO types of misses?
-	// TODO prefetcher?
+    u64 write_backs;
 };
 
 typedef struct controller_interface_stats_t controller_interface_stats_t;
@@ -64,15 +72,16 @@ struct cache_t
     char * name;
 };
 
-// TODO
-// typedef struct tag_cache_t tag_cache_t;
-// struct tag_cache_t
-// {
-//     cache_line_t * entries; // NOTE won't store tag in them
-//     u32 tags_size;
-//     u8 * tags; // NOTE tag controller's view of memory
-//     tag_cache_stats_t stats;
-// };
+typedef struct tag_cache_t tag_cache_t;
+struct tag_cache_t
+{
+    u32 size;
+    u32 num_ways;
+    cache_line_t * entries; // NOTE won't store tag in them
+    u32 tags_size;
+    u8 * tags; // NOTE tag controller's view of memory
+    tag_cache_stats_t stats;
+};
 
 typedef struct controller_interface_t controller_interface_t;
 struct controller_interface_t
@@ -86,7 +95,7 @@ struct controller_interface_t
 enum device_type_t
 {
     DEVICE_TYPE_CACHE,
-    // DEVICE_TYPE_TAG_CACHE // TODO
+    DEVICE_TYPE_TAG_CACHE,
     DEVICE_TYPE_CONTROLLER_INTERFACE
 };
 
@@ -100,7 +109,7 @@ struct device_t
     union
     {
         cache_t cache;
-        // tag_cache_t tag_cache;
+        tag_cache_t tag_cache;
         controller_interface_t controller_interface;
     };
     device_t * children[DEVICE_MAX_CHILDREN];
@@ -110,8 +119,11 @@ struct device_t
 cache_line_t * cache_request(device_t * device, u64 paddr);
 device_t * cache_init(arena_t * arena, char * name, u32 size, u32 num_ways, device_t * parent);
 
-// device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename);
+device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename, u32 size, u32 num_ways);
 device_t * controller_interface_init(arena_t * arena, char * initial_tags_filename, char * output_filename);
+
+void device_write(device_t * device, u64 paddr, b8 tags_cheri);
+b8 device_read(device_t * device, u64 paddr);
 
 void device_print_configuration(device_t * device);
 void device_print_statistics(device_t * device);

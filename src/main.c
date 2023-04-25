@@ -62,6 +62,10 @@ int main(int argc, char * argv[])
         {
             string_lit("simulate"),
             trace_simulate
+        },
+        {
+            string_lit("simulate-tag-cache"),
+            trace_simulate_uncompressed
         }
     };
 

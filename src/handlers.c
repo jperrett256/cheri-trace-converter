@@ -599,9 +599,7 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
     char * initial_tags_filename = args[1];
     char * output_requests_filename = args[2];
 
-    // device_t tag_controller = tag_cache_init(arena, initial_tags_filename); // TODO , KILOBYTES(32), 4, NULL);
     device_t * tag_controller = controller_interface_init(arena, initial_tags_filename, output_requests_filename);
-
     device_t * l2_cache = cache_init(arena, "L2", KILOBYTES(1024), 8, tag_controller);
 
     device_t * l1_instr_cache = cache_init(arena, "L1I", KILOBYTES(64), 4, l2_cache);
@@ -796,4 +794,63 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
             - would make it easier to produce "core dumps" (don't have to consolidate information)
 
      */
+}
+
+void trace_simulate_uncompressed(COMMAND_HANDLER_ARGS)
+{
+    if (num_args != 2)
+    {
+        printf("Usage: %s %s <controller trace file> <initial state>\n", exe_name, cmd_name);
+        quit();
+    }
+
+    char * input_trace_filename = args[0];
+    char * initial_tags_filename = args[1];
+
+    device_t * tag_controller = tag_cache_init(arena, initial_tags_filename, KILOBYTES(32), 4);
+
+    gzFile input_trace_file = gzopen(input_trace_filename, "rb");
+
+    printf("Simulating with following configuration:\n");
+    device_print_configuration(tag_controller);
+    printf("\n");
+
+    while (true)
+    {
+        tag_cache_request_t current_entry = {0};
+        int bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
+
+        assert(sizeof(current_entry) <= INT_MAX);
+        if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
+
+        assert(current_entry.size == CACHE_LINE_SIZE);
+
+        u64 paddr = current_entry.paddr;
+        assert(check_paddr_valid(paddr));
+        assert(paddr % CACHE_LINE_SIZE == 0);
+        assert(paddr % CAP_SIZE_BYTES == 0);
+
+        // TODO support larger cache line sizes?
+        assert(current_entry.tags == (u8) current_entry.tags);
+        b8 tags_cheri = current_entry.tags;
+
+        switch (current_entry.type)
+        {
+            case TAG_CACHE_REQUEST_TYPE_READ:
+            {
+                b8 tags_read = device_read(tag_controller, paddr);
+                assert(tags_read == tags_cheri);
+            } break;
+            case TAG_CACHE_REQUEST_TYPE_WRITE:
+            {
+                device_write(tag_controller, paddr, tags_cheri);
+            } break;
+            default: assert(!"Impossible.");
+        }
+    }
+
+    printf("Statistics:\n");
+    device_print_statistics(tag_controller);
+    device_cleanup(tag_controller);
+    printf("\n");
 }

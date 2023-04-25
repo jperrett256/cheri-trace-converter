@@ -20,8 +20,7 @@ static void get_initial_tags(char * initial_tags_filename, u32 tags_buffer_size,
     fclose(initial_tags_file);
 }
 
-/*
-device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename)
+device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename, u32 size, u32 num_ways)
 {
     device_t * device = arena_push(arena, sizeof(device_t));
     *device = (device_t) {0};
@@ -31,11 +30,25 @@ device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename)
     device->tag_cache.tags = arena_push_array(arena, u8, device->tag_cache.tags_size);
     get_initial_tags(initial_tags_filename, device->tag_cache.tags_size, device->tag_cache.tags);
 
-    // TODO
+    device->tag_cache.size = size;
+    device->tag_cache.num_ways = num_ways;
+    assert(size % num_ways == 0);
+
+    device->tag_cache.entries = arena_push_array(arena, cache_line_t, size);
+
+    for (i64 set_start_idx = 0; set_start_idx < size; set_start_idx += num_ways)
+    for (i64 way = 0; way < num_ways; way++)
+    {
+        assert(set_start_idx + way < size);
+        device->tag_cache.entries[set_start_idx + way].tag_addr = INVALID_TAG;
+        device->tag_cache.entries[set_start_idx + way].counter = way; // LRU replacement policy
+
+        device->tag_cache.entries[set_start_idx + way].tags_cheri = 0; // not used
+    }
+
 
     return device;
 }
-*/
 
 device_t * controller_interface_init(arena_t * arena, char * initial_tags_filename, char * output_filename)
 {
@@ -131,7 +144,100 @@ static void tag_table_write(u8 * tag_table, u32 tag_table_size, u64 paddr, b8 ta
     assert(((tag_table[tag_table_idx] & ~clear_mask) >> first_bit) == tags_cheri);
 }
 
-static void device_write(device_t * device, u64 paddr, b8 tags_cheri)
+static void tag_cache_record_access(device_t * device, u64 paddr)
+{
+    assert(paddr % CACHE_LINE_SIZE == 0);
+
+    // TODO make normal cache utility function more generic?
+    u64 tag_addr = paddr >> CACHE_LINE_SIZE_BITS;
+    u32 num_sets = device->tag_cache.size / device->tag_cache.num_ways;
+    u32 set_start_idx = (tag_addr % num_sets) * device->tag_cache.num_ways;
+
+    assert(tag_addr != INVALID_TAG);
+
+    i64 way = -1;
+    for (i64 i = 0; i < device->tag_cache.num_ways; i++)
+    {
+        if (device->tag_cache.entries[set_start_idx + i].tag_addr == tag_addr)
+        {
+            assert(way == -1);
+            way = i;
+        }
+    }
+
+    cache_line_t * result = NULL;
+    if (way >= 0)
+    {
+        device->tag_cache.stats.hits++;
+
+        result = &device->cache.entries[set_start_idx + way];
+    }
+    else
+    {
+        device->tag_cache.stats.misses++;
+
+        // TODO utility function?
+        // choose a way to fill next
+        way = -1;
+        u16 largest_counter = 0;
+        for (i64 i = 0; i < device->tag_cache.num_ways; i++)
+        {
+            if (device->tag_cache.entries[set_start_idx + i].tag_addr == INVALID_TAG)
+            {
+                way = i;
+                break;
+            }
+
+            u16 current_counter = device->tag_cache.entries[set_start_idx + i].counter;
+            if (current_counter >= largest_counter)
+            {
+                assert(current_counter != largest_counter || largest_counter == 0);
+                largest_counter = current_counter;
+                way = i;
+            }
+        }
+        assert(way >= 0);
+
+        cache_line_t * line_to_replace = &device->tag_cache.entries[set_start_idx + way];
+        if (line_to_replace->tag_addr != INVALID_TAG)
+        {
+            if (line_to_replace->dirty)
+            {
+                device->tag_cache.stats.write_backs++;
+            }
+        }
+
+        assert(line_to_replace->tags_cheri == 0);
+        line_to_replace->dirty = false;
+        line_to_replace->tag_addr = tag_addr;
+
+        result = line_to_replace;
+    }
+
+    assert(result != NULL);
+
+    // update cache line counters (LRU replacement policy)
+    u16 result_counter = result->counter;
+
+    if (result_counter != 0)
+    {
+        for (i64 i = 0; i < device->cache.num_ways; i++)
+        {
+            if (device->cache.entries[set_start_idx + i].counter <= result_counter)
+            {
+                device->cache.entries[set_start_idx + i].counter =
+                    (device->cache.entries[set_start_idx + i].counter + 1) % device->cache.num_ways;
+            }
+        }
+
+        result->counter = 0;
+    }
+
+    assert(result != NULL);
+    assert(result->counter == 0);
+}
+
+void device_write(device_t * device, u64 paddr, b8 tags_cheri)
 {
     switch (device->type)
     {
@@ -140,6 +246,11 @@ static void device_write(device_t * device, u64 paddr, b8 tags_cheri)
             cache_line_t * cache_line = cache_request(device, paddr);
             cache_line->tags_cheri = tags_cheri;
             cache_line->dirty = true;
+        } break;
+        case DEVICE_TYPE_TAG_CACHE:
+        {
+            tag_cache_record_access(device, paddr);
+            tag_table_write(device->tag_cache.tags, device->tag_cache.tags_size, paddr, tags_cheri);
         } break;
         case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
@@ -154,7 +265,7 @@ static void device_write(device_t * device, u64 paddr, b8 tags_cheri)
     }
 }
 
-static b8 device_read(device_t * device, u64 paddr)
+b8 device_read(device_t * device, u64 paddr)
 {
     switch (device->type)
     {
@@ -162,6 +273,12 @@ static b8 device_read(device_t * device, u64 paddr)
         {
             cache_line_t * cache_line = cache_request(device, paddr);
             return cache_line->tags_cheri;
+        } break;
+        case DEVICE_TYPE_TAG_CACHE:
+        {
+            tag_cache_record_access(device, paddr);
+            b8 tags_cheri = tag_table_read(device->tag_cache.tags, device->tag_cache.tags_size, paddr);
+            return tags_cheri;
         } break;
         case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
@@ -327,12 +444,6 @@ cache_line_t * cache_request(device_t * device, u64 paddr)
                     assert(parent_prev_hits != UINT64_MAX && parent_prev_misses != UINT64_MAX);
 
                     // expect hit in next level cache already when writing-back
-                    if (device->parent->cache.stats.misses != parent_prev_misses) /* DEBUG */
-                    {
-                        fflush(stdout);
-                        printf("prev misses: %lu, prev hits: %lu\n", parent_prev_misses, parent_prev_hits);
-                        printf("misses: %lu, hits: %lu\n", device->parent->cache.stats.misses, device->parent->cache.stats.hits);
-                    }
                     assert(device->parent->cache.stats.misses == parent_prev_misses);
                     assert(device->parent->cache.stats.hits == parent_prev_hits + 1);
                 }
@@ -347,34 +458,6 @@ cache_line_t * cache_request(device_t * device, u64 paddr)
                     // check tags match what we have in the next cache
                     u32 parent_set_start_idx;
                     i64 parent_way = cache_find_existing(device->parent, line_to_replace->tag_addr, &parent_set_start_idx);
-
-                    if (parent_way < 0) /* DEBUG */
-                    {
-                        printf("Just had a miss in '%s', about to replace way %ld (not dirty).\n", device->cache.name, way);
-                        printf("Expected to find this cache line in parent, but didn't??\n");
-
-                        printf(INDENT4 "Set contents:\n");
-                        for (i64 i = 0; i < device->cache.num_ways; i++)
-                        {
-                            cache_line_t cache_line = device->cache.entries[set_start_idx + i];
-                            printf(INDENT8 "Way %ld [ addr: %lu, counter: %hu, dirty: %s ]\n", i,
-                                cache_line.tag_addr != INVALID_TAG ? cache_line.tag_addr << CACHE_LINE_SIZE_BITS : 0,
-                                cache_line.counter,
-                                cache_line.dirty ? "true" : "false");
-                        }
-
-                        printf(INDENT4 "Parent set contents:\n");
-                        for (i64 i = 0; i < device->parent->cache.num_ways; i++)
-                        {
-                            cache_line_t cache_line = device->parent->cache.entries[parent_set_start_idx + i];
-                            printf(INDENT8 "Way %ld [ addr: %lu, counter: %hu, dirty: %s ]\n", i,
-                                cache_line.tag_addr != INVALID_TAG ? cache_line.tag_addr << CACHE_LINE_SIZE_BITS : 0,
-                                cache_line.counter,
-                                cache_line.dirty ? "true" : "false");
-                        }
-
-                        fflush(stdout);
-                    }
 
                     assert(parent_way >= 0);
                     assert(device->parent->cache.entries[parent_set_start_idx + parent_way].tags_cheri == line_to_replace->tags_cheri);
@@ -410,7 +493,6 @@ cache_line_t * cache_request(device_t * device, u64 paddr)
 
         assert(CACHE_LINE_SIZE % CAP_SIZE_BYTES == 0);
         assert(CACHE_LINE_SIZE / CAP_SIZE_BYTES <= 8);
-        // assert(CACHE_LINE_SIZE / CAP_SIZE_BYTES == 8 || ((~((1 << (CACHE_LINE_SIZE/CAP_SIZE_BYTES))-1) & tags_cheri) == 0));
         assert((~((1 << (CACHE_LINE_SIZE/CAP_SIZE_BYTES))-1) & tags_cheri) == 0);
 
         line_to_replace->dirty = false;
@@ -439,6 +521,8 @@ cache_line_t * cache_request(device_t * device, u64 paddr)
          */
 
     }
+
+    assert(result != NULL);
 
     // update cache line counters (LRU replacement policy)
     u16 result_counter = result->counter;
@@ -473,10 +557,10 @@ static char * device_get_name(device_t * device)
             assert(device->cache.name);
             return device->cache.name;
         } break;
-        // case DEVICE_TYPE_TAG_CACHE:
-        // {
-        //     return "TAG CONTROLLER";
-        // } break;
+        case DEVICE_TYPE_TAG_CACHE:
+        {
+            return "TAG CONTROLLER (UNCOMPRESSED)"; // TODO compressed/other kinds?
+        } break;
         case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
             return "TAG CONTROLLER (INTERFACE)";
@@ -498,7 +582,11 @@ void device_print_configuration(device_t * device)
                 device_get_name(device), device->cache.num_ways, device->cache.size,
                 device->parent ? device_get_name(device->parent) : "NULL");
         } break;
-        // case DEVICE_TYPE_TAG_CACHE: // TODO associativity, size?
+        case DEVICE_TYPE_TAG_CACHE:
+        {
+            printf(INDENT4 "%s (%u-way, %u bytes)\n",
+                device_get_name(device), device->tag_cache.num_ways, device->tag_cache.size);
+        } break;
         case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
             printf(INDENT4 "%s\n", device_get_name(device));
@@ -522,6 +610,15 @@ void device_print_statistics(device_t * device)
             printf(INDENT8 "Miss rate: %f\n",
                 (double) device->cache.stats.misses / (device->cache.stats.hits + device->cache.stats.misses));
         } break;
+        case DEVICE_TYPE_TAG_CACHE:
+        {
+            printf(INDENT8 "Hits: %lu\n", device->tag_cache.stats.hits);
+            printf(INDENT8 "Misses: %lu\n", device->tag_cache.stats.misses);
+            printf(INDENT8 "Write backs: %lu\n", device->tag_cache.stats.write_backs);
+
+            printf(INDENT8 "Miss rate: %f\n",
+                (double) device->tag_cache.stats.misses / (device->tag_cache.stats.hits + device->tag_cache.stats.misses));
+        } break;
         case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
             printf(INDENT8 "Reads: %lu\n", device->controller_interface.stats.reads);
@@ -540,6 +637,7 @@ void device_cleanup(device_t * device)
             controller_interface_cleanup(device);
         } break;
         case DEVICE_TYPE_CACHE:
+        case DEVICE_TYPE_TAG_CACHE:
             break;
         default: assert(!"Impossible.");
     }
