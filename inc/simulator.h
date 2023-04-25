@@ -4,8 +4,8 @@
 #include "jdp.h"
 #include <zlib.h>
 
-#define CACHE_LINE_SIZE 128
-#define CACHE_LINE_SIZE_BITS 7
+#define CACHE_LINE_SIZE 64
+#define CACHE_LINE_SIZE_BITS 6
 static_assert((1 << CACHE_LINE_SIZE_BITS) == CACHE_LINE_SIZE, "Cache line size constants are incorrect.");
 
 #define INVALID_TAG ((u64) -1)
