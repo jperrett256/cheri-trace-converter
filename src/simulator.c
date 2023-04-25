@@ -83,13 +83,8 @@ static void controller_interface_cleanup(device_t * device)
     gzclose(device->controller_interface.output);
 }
 
-// static inline void tag_table_get_index(u32 tag_table_size, u64 paddr,
-//     u64 * tag_table_idx, i8 * first_bit, u32 * clear_mask)
-// {
-
-// }
-
-static b8 tag_table_read(u8 * tag_table, u32 tag_table_size, u64 paddr)
+static inline void tag_table_get_index(u32 tag_table_size, u64 paddr,
+    u64 * tag_table_idx_ptr, u32 * first_bit_ptr, u32 * clear_mask_ptr)
 {
     assert(paddr % CACHE_LINE_SIZE == 0);
     assert(paddr % CAP_SIZE_BYTES == 0);
@@ -97,7 +92,7 @@ static b8 tag_table_read(u8 * tag_table, u32 tag_table_size, u64 paddr)
     assert(check_paddr_valid(paddr));
     u64 mem_offset = paddr - BASE_PADDR;
     i64 tag_table_idx = mem_offset / CAP_SIZE_BYTES / 8;
-    i8 first_bit = mem_offset / CAP_SIZE_BYTES % 8;
+    u32 first_bit = mem_offset / CAP_SIZE_BYTES % 8;
     assert(tag_table_idx >= 0 && tag_table_idx < tag_table_size);
     assert(first_bit >= 0 && first_bit < 8);
 
@@ -107,9 +102,16 @@ static b8 tag_table_read(u8 * tag_table, u32 tag_table_size, u64 paddr)
     clear_mask <<= first_bit;
     clear_mask |= (1 << first_bit) - 1;
 
-    // printf("clear mask: %08X\n", clear_mask); // DEBUG
-    // printf("start bit: %d, num bits: %u\n", first_bit, num_bits); // DEBUG
-    // fflush(stdout); // DEBUG
+    *tag_table_idx_ptr = tag_table_idx;
+    *first_bit_ptr = first_bit;
+    *clear_mask_ptr = clear_mask;
+}
+
+static b8 tag_table_read(u8 * tag_table, u32 tag_table_size, u64 paddr)
+{
+    u64 tag_table_idx;
+    u32 first_bit, clear_mask;
+    tag_table_get_index(tag_table_size, paddr, &tag_table_idx, &first_bit, &clear_mask);
 
     b8 tags_cheri = (tag_table[tag_table_idx] & ~clear_mask) >> first_bit;
     assert((tags_cheri << first_bit) == ((tags_cheri << first_bit) & ~clear_mask));
@@ -119,50 +121,14 @@ static b8 tag_table_read(u8 * tag_table, u32 tag_table_size, u64 paddr)
 
 static void tag_table_write(u8 * tag_table, u32 tag_table_size, u64 paddr, b8 tags_cheri)
 {
-    assert(paddr % CACHE_LINE_SIZE == 0);
-    assert(paddr % CAP_SIZE_BYTES == 0);
-
-    assert(check_paddr_valid(paddr));
-    u64 mem_offset = paddr - BASE_PADDR;
-    i64 tag_table_idx = mem_offset / CAP_SIZE_BYTES / 8;
-    i8 first_bit = mem_offset / CAP_SIZE_BYTES % 8;
-    assert(tag_table_idx >= 0 && tag_table_idx < tag_table_size);
-    assert(first_bit >= 0 && first_bit < 8);
-
-    u32 num_bits = CACHE_LINE_SIZE / CAP_SIZE_BYTES;
-    assert(num_bits <= 8 && num_bits >= 1);
-    u32 clear_mask = ((u32) -1) << num_bits;
-    clear_mask <<= first_bit;
-    clear_mask |= (1 << first_bit) - 1;
-
-    // printf("clear mask: %08X\n", clear_mask); // DEBUG
-    // printf("start bit: %d, num bits: %u\n", first_bit, num_bits); // DEBUG
-    // printf("tag table byte (before): %02x\n", tag_table[tag_table_idx]); // DEBUG
-    // printf("writing: %02x\n", tags_cheri); // DEBUG
+    u64 tag_table_idx;
+    u32 first_bit, clear_mask;
+    tag_table_get_index(tag_table_size, paddr, &tag_table_idx, &first_bit, &clear_mask);
 
     tag_table[tag_table_idx] &= clear_mask;
     assert((tags_cheri << first_bit) == ((tags_cheri << first_bit) & ~clear_mask));
     tag_table[tag_table_idx] |= tags_cheri << first_bit;
     assert(((tag_table[tag_table_idx] & ~clear_mask) >> first_bit) == tags_cheri);
-
-    // printf("tag table byte (after): %02x\n", tag_table[tag_table_idx]); // DEBUG
-    // fflush(stdout); // DEBUG
-
-
-    // // TODO can definitely optimise, no need to copy bit by bit (especially if each cache line has 8 tag bits)
-    // for (u64 paddr_cap = paddr; paddr_cap < paddr + CACHE_LINE_SIZE; paddr_cap += CAP_SIZE_BYTES)
-    // {
-    //     // TODO utility function for getting tag idx and tag bit?
-    //     assert(check_paddr_valid(paddr));
-    //     u64 mem_offset = paddr - BASE_PADDR;
-
-    //     i64 tag_table_idx = mem_offset / CAP_SIZE_BYTES / 8;
-    //     i8 tag_entry_bit = mem_offset / CAP_SIZE_BYTES % 8;
-    //     assert(tag_table_idx >= 0 && tag_table_idx < device->controller_interface.tags_size);
-    //     assert(tag_entry_bit >= 0 && tag_entry_bit < 8);
-
-    //     // initial_tag_state[tag_table_idx] |= 1 << tag_entry_bit;
-    // }
 }
 
 static void device_write(device_t * device, u64 paddr, b8 tags_cheri)
