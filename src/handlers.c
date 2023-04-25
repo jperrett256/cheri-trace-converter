@@ -627,6 +627,9 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
 
     gzFile input_trace_file = gzopen(input_trace_filename, "rb");
 
+    i64 dbg_paddrs_missing = 0;
+    i64 dbg_paddrs_invalid = 0;
+
     while (true)
     {
         custom_trace_entry_t current_entry = {0};
@@ -639,6 +642,14 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
          * VIPT relies on the fact that the lowest bits of the physical and virtual addresses are the same,
          * so this will have no affect on indexing.
          */
+
+        if (!check_paddr_valid(current_entry.paddr))
+        {
+            if (current_entry.paddr == 0) dbg_paddrs_missing++;
+            else dbg_paddrs_invalid++;
+
+            continue;
+        }
 
         u64 start_addr = align_floor_pow_2(current_entry.paddr, CACHE_LINE_SIZE);
         u64 end_addr = align_ceil_pow_2(current_entry.paddr, CACHE_LINE_SIZE);
@@ -708,6 +719,10 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
             }
         }
     }
+
+    printf("Entries missing paddrs (skipped): %ld\n", dbg_paddrs_missing);
+    printf("Entries with invalid paddrs (skipped): %ld\n", dbg_paddrs_invalid);
+    printf("\n");
 
     printf("Statistics:\n");
     for (i64 i = 0; i < num_devices; i++)
