@@ -8,7 +8,11 @@
 
 EXTERN_C
 
+#include "jdp.h"
 #include "trace.h"
+#include "common.h"
+#include "hashmap.h"
+#include "drcachesim.h"
 
 void write_drcachesim_header(gzFile file)
 {
@@ -38,14 +42,41 @@ void write_drcachesim_header(gzFile file)
         .addr = 0
     };
 
+    trace_entry_t page_size =
+    {
+        .type = TRACE_TYPE_MARKER,
+        .size = TRACE_MARKER_TYPE_PAGE_SIZE,
+        .addr = PAGE_SIZE
+    };
+
     gzwrite(file, &header, sizeof(header));
     gzwrite(file, &thread, sizeof(thread));
     gzwrite(file, &pid, sizeof(pid));
     gzwrite(file, &timestamp, sizeof(timestamp));
     gzwrite(file, &cpuid, sizeof(cpuid));
+    gzwrite(file, &page_size, sizeof(page_size));
 }
 
-void write_drcachesim_trace_entry(gzFile file, custom_trace_entry_t custom_entry)
+static void write_drcachesim_page_mapping_entries(gzFile file, u64 vaddr, u64 paddr)
+{
+    trace_entry_t paddr_mapping_entry =
+    {
+        .type = TRACE_TYPE_MARKER,
+        .size = TRACE_MARKER_TYPE_PHYSICAL_ADDRESS,
+        .addr = paddr
+    };
+    trace_entry_t vaddr_mapping_entry =
+    {
+        .type = TRACE_TYPE_MARKER,
+        .size = TRACE_MARKER_TYPE_VIRTUAL_ADDRESS,
+        .addr = vaddr
+    };
+
+    gzwrite(file, &paddr_mapping_entry, sizeof(paddr_mapping_entry));
+    gzwrite(file, &vaddr_mapping_entry, sizeof(vaddr_mapping_entry));
+}
+
+void write_drcachesim_trace_entry(gzFile file, map_u64 page_table, custom_trace_entry_t custom_entry)
 {
     assert(file);
 
@@ -69,9 +100,44 @@ void write_drcachesim_trace_entry(gzFile file, custom_trace_entry_t custom_entry
         default: assert(!"Impossible");
     }
 
-    // TODO should emit vaddr or paddr? paddr for data, vaddr for instructions?
-    // TODO test both
-    drcachesim_entry.addr = custom_entry.paddr;
+    u64 vaddr = custom_entry.vaddr;
+    u64 paddr = custom_entry.paddr;
+
+    u64 phys_page_start;
+    if (map_u64_get(page_table, get_page_start(vaddr), &phys_page_start))
+    {
+        if (check_paddr_valid(paddr))
+        {
+            if (phys_page_start != get_page_start(paddr))
+            {
+                map_u64_set(page_table, get_page_start(vaddr), get_page_start(paddr));
+
+                write_drcachesim_page_mapping_entries(file, vaddr, paddr);
+            }
+        }
+    }
+    else if (check_paddr_valid(paddr))
+    {
+        map_u64_set(page_table, get_page_start(vaddr), get_page_start(paddr));
+
+        write_drcachesim_page_mapping_entries(file, vaddr, paddr);
+    }
+    else
+    {
+        // TODO skip these instead?
+        printf("ERROR: missing paddr for first access to page (vaddr: %lu)\n", vaddr);
+
+        trace_entry_t no_mapping_entry =
+        {
+            .type = TRACE_TYPE_MARKER,
+            .size = TRACE_MARKER_TYPE_PHYSICAL_ADDRESS_NOT_AVAILABLE,
+            .addr = vaddr
+        };
+
+        gzwrite(file, &no_mapping_entry, sizeof(no_mapping_entry));
+    }
+
+    drcachesim_entry.addr = custom_entry.vaddr;
     drcachesim_entry.size = custom_entry.size;
 
     gzwrite(file, &drcachesim_entry, sizeof(drcachesim_entry));

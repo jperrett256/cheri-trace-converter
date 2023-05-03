@@ -188,11 +188,6 @@ static bool gz_at_eof(int bytes_read, int expected_bytes)
     return false;
 }
 
-static u64 get_page_start(u64 addr)
-{
-    return addr & ~((1 << 12) - 1);
-}
-
 
 void trace_get_info(COMMAND_HANDLER_ARGS)
 {
@@ -353,14 +348,15 @@ void trace_convert_drcachesim(COMMAND_HANDLER_ARGS)
 
     if (file_exists(output_trace_filename))
     {
-        printf("ERROR: Attempted to overwrite existing file \"%s\".\n", output_trace_filename);
-        quit();
+        if (!confirm_overwrite_file(output_trace_filename)) quit();
     }
 
     gzFile input_file = gzopen(input_trace_filename, "rb");
     gzFile output_file = gzopen(output_trace_filename, "wb");
 
     write_drcachesim_header(output_file);
+
+    map_u64 page_table = map_u64_create();
 
     while (true)
     {
@@ -370,10 +366,12 @@ void trace_convert_drcachesim(COMMAND_HANDLER_ARGS)
         assert(sizeof(current_entry) <= INT_MAX);
         if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
 
-        write_drcachesim_trace_entry(output_file, current_entry);
+        write_drcachesim_trace_entry(output_file, page_table, current_entry);
     }
 
     write_drcachesim_footer(output_file);
+
+    map_u64_cleanup(&page_table);
 
     gzclose(input_file);
     gzclose(output_file);
