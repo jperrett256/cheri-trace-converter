@@ -1,3 +1,4 @@
-[submodule "dynamorio"]
+[submodule "inc/dynamorio"]
 	path = inc/dynamorio
-	url = https://github.com/CTSRD-CHERI/dynamorio.git
+	url = https://github.com/jperrett256/dynamorio.git
+	branch = drcachesim-cheri

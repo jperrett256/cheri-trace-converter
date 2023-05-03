@@ -140,6 +140,12 @@ void write_drcachesim_trace_entry(gzFile file, map_u64 page_table, custom_trace_
     drcachesim_entry.addr = custom_entry.vaddr;
     drcachesim_entry.size = custom_entry.size;
 
+    if (custom_entry.type == CUSTOM_TRACE_TYPE_STORE) assert(custom_entry.tag == 0);
+
+    drcachesim_entry.tag_cheri = custom_entry.type == CUSTOM_TRACE_TYPE_LOAD ? -1 : custom_entry.tag;
+    drcachesim_entry.cap_access =
+        (custom_entry.type == CUSTOM_TRACE_TYPE_CLOAD || custom_entry.type == CUSTOM_TRACE_TYPE_CSTORE);
+
     gzwrite(file, &drcachesim_entry, sizeof(drcachesim_entry));
 }
 
