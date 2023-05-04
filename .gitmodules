@@ -1,4 +1,4 @@
 [submodule "inc/dynamorio"]
 	path = inc/dynamorio
 	url = https://github.com/jperrett256/dynamorio.git
-	branch = drcachesim-cheri
+	branch = drcachesim-cheri-compatibility

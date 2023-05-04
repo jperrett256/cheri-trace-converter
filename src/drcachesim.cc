@@ -140,11 +140,24 @@ void write_drcachesim_trace_entry(gzFile file, map_u64 page_table, custom_trace_
     drcachesim_entry.addr = custom_entry.vaddr;
     drcachesim_entry.size = custom_entry.size;
 
+    if (custom_entry.type == CUSTOM_TRACE_TYPE_INSTR) assert(custom_entry.tag == 0);
     if (custom_entry.type == CUSTOM_TRACE_TYPE_STORE) assert(custom_entry.tag == 0);
 
-    drcachesim_entry.tag_cheri = custom_entry.type == CUSTOM_TRACE_TYPE_LOAD ? -1 : custom_entry.tag;
-    drcachesim_entry.cap_access =
-        (custom_entry.type == CUSTOM_TRACE_TYPE_CLOAD || custom_entry.type == CUSTOM_TRACE_TYPE_CSTORE);
+    if (custom_entry.type != CUSTOM_TRACE_TYPE_LOAD && custom_entry.type != CUSTOM_TRACE_TYPE_INSTR)
+    {
+        // don't know tag for LOADs, know tag is cleared for instructions
+
+        assert(custom_entry.tag == 0 || custom_entry.tag == 1);
+
+        trace_entry_t tag_entry =
+        {
+            .type = TRACE_TYPE_MARKER,
+            .size = TRACE_MARKER_TYPE_TAG_CHERI,
+            .addr = custom_entry.tag
+        };
+
+        gzwrite(file, &tag_entry, sizeof(tag_entry));
+    }
 
     gzwrite(file, &drcachesim_entry, sizeof(drcachesim_entry));
 }
