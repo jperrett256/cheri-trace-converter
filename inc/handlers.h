@@ -8,7 +8,8 @@
 void trace_get_info(COMMAND_HANDLER_ARGS);
 void trace_patch_paddrs(COMMAND_HANDLER_ARGS);
 void trace_convert(COMMAND_HANDLER_ARGS);
-void trace_convert_drcachesim(COMMAND_HANDLER_ARGS);
+void trace_convert_drcachesim_vaddr(COMMAND_HANDLER_ARGS);
+void trace_convert_drcachesim_paddr(COMMAND_HANDLER_ARGS);
 void trace_get_initial_tags(COMMAND_HANDLER_ARGS);
 void trace_simulate(COMMAND_HANDLER_ARGS);
 void trace_simulate_uncompressed(COMMAND_HANDLER_ARGS);

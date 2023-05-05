@@ -57,6 +57,67 @@ void write_drcachesim_header(gzFile file)
     gzwrite(file, &page_size, sizeof(page_size));
 }
 
+void write_drcachesim_footer(gzFile file)
+{
+    assert(file);
+
+    trace_entry_t footer =
+    {
+        .type = TRACE_TYPE_FOOTER,
+        .size = 0,
+        .addr = 0
+    };
+
+    gzwrite(file, &footer, sizeof(footer));
+}
+
+static unsigned short get_drcachesim_type(uint8_t type)
+{
+    switch (type)
+    {
+        case CUSTOM_TRACE_TYPE_INSTR:
+        {
+            return TRACE_TYPE_INSTR;
+        } break;
+        case CUSTOM_TRACE_TYPE_LOAD:
+        case CUSTOM_TRACE_TYPE_CLOAD:
+        {
+            return TRACE_TYPE_READ;
+        } break;
+        case CUSTOM_TRACE_TYPE_STORE:
+        case CUSTOM_TRACE_TYPE_CSTORE:
+        {
+            return TRACE_TYPE_WRITE;
+        } break;
+        default: assert(!"Impossible");
+    }
+
+    assert(!"Impossible");
+    return -1;
+}
+
+static void write_drcachesim_tag_entry(gzFile file, uint8_t type, uint8_t tag)
+{
+    if (type == CUSTOM_TRACE_TYPE_INSTR) assert(tag == 0);
+    if (type == CUSTOM_TRACE_TYPE_STORE) assert(tag == 0);
+
+    if (type != CUSTOM_TRACE_TYPE_LOAD && type != CUSTOM_TRACE_TYPE_INSTR)
+    {
+        // don't know tag for LOADs, know tag is cleared for instructions
+
+        assert(tag == 0 || tag == 1);
+
+        trace_entry_t tag_entry =
+        {
+            .type = TRACE_TYPE_MARKER,
+            .size = TRACE_MARKER_TYPE_TAG_CHERI,
+            .addr = tag
+        };
+
+        gzwrite(file, &tag_entry, sizeof(tag_entry));
+    }
+}
+
 static void write_drcachesim_page_mapping_entries(gzFile file, u64 vaddr, u64 paddr)
 {
     trace_entry_t paddr_mapping_entry =
@@ -76,29 +137,9 @@ static void write_drcachesim_page_mapping_entries(gzFile file, u64 vaddr, u64 pa
     gzwrite(file, &vaddr_mapping_entry, sizeof(vaddr_mapping_entry));
 }
 
-void write_drcachesim_trace_entry(gzFile file, map_u64 page_table, custom_trace_entry_t custom_entry)
+void write_drcachesim_trace_entry_vaddr(gzFile file, map_u64 page_table, custom_trace_entry_t custom_entry)
 {
     assert(file);
-
-    trace_entry_t drcachesim_entry;
-    switch (custom_entry.type)
-    {
-        case CUSTOM_TRACE_TYPE_INSTR:
-        {
-            drcachesim_entry.type = TRACE_TYPE_INSTR;
-        } break;
-        case CUSTOM_TRACE_TYPE_LOAD:
-        case CUSTOM_TRACE_TYPE_CLOAD:
-        {
-            drcachesim_entry.type = TRACE_TYPE_READ;
-        } break;
-        case CUSTOM_TRACE_TYPE_STORE:
-        case CUSTOM_TRACE_TYPE_CSTORE:
-        {
-            drcachesim_entry.type = TRACE_TYPE_WRITE;
-        } break;
-        default: assert(!"Impossible");
-    }
 
     u64 vaddr = custom_entry.vaddr;
     u64 paddr = custom_entry.paddr;
@@ -137,43 +178,28 @@ void write_drcachesim_trace_entry(gzFile file, map_u64 page_table, custom_trace_
         gzwrite(file, &no_mapping_entry, sizeof(no_mapping_entry));
     }
 
-    drcachesim_entry.addr = custom_entry.vaddr;
+    write_drcachesim_tag_entry(file, custom_entry.type, custom_entry.tag);
+
+    trace_entry_t drcachesim_entry;
+    drcachesim_entry.type = get_drcachesim_type(custom_entry.type);
+
     drcachesim_entry.size = custom_entry.size;
-
-    if (custom_entry.type == CUSTOM_TRACE_TYPE_INSTR) assert(custom_entry.tag == 0);
-    if (custom_entry.type == CUSTOM_TRACE_TYPE_STORE) assert(custom_entry.tag == 0);
-
-    if (custom_entry.type != CUSTOM_TRACE_TYPE_LOAD && custom_entry.type != CUSTOM_TRACE_TYPE_INSTR)
-    {
-        // don't know tag for LOADs, know tag is cleared for instructions
-
-        assert(custom_entry.tag == 0 || custom_entry.tag == 1);
-
-        trace_entry_t tag_entry =
-        {
-            .type = TRACE_TYPE_MARKER,
-            .size = TRACE_MARKER_TYPE_TAG_CHERI,
-            .addr = custom_entry.tag
-        };
-
-        gzwrite(file, &tag_entry, sizeof(tag_entry));
-    }
+    drcachesim_entry.addr = custom_entry.vaddr;
 
     gzwrite(file, &drcachesim_entry, sizeof(drcachesim_entry));
 }
 
-void write_drcachesim_footer(gzFile file)
+void write_drcachesim_trace_entry_paddr(gzFile file, custom_trace_entry_t custom_entry)
 {
-    assert(file);
+    write_drcachesim_tag_entry(file, custom_entry.type, custom_entry.tag);
 
-    trace_entry_t footer =
-    {
-        .type = TRACE_TYPE_FOOTER,
-        .size = 0,
-        .addr = 0
-    };
+    trace_entry_t drcachesim_entry;
+    drcachesim_entry.type = get_drcachesim_type(custom_entry.type);
 
-    gzwrite(file, &footer, sizeof(footer));
+    drcachesim_entry.size = custom_entry.size;
+    drcachesim_entry.addr = custom_entry.paddr;
+
+    gzwrite(file, &drcachesim_entry, sizeof(drcachesim_entry));
 }
 
 EXTERN_C_END

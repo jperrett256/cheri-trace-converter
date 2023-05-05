@@ -335,7 +335,8 @@ void trace_convert(COMMAND_HANDLER_ARGS)
     // TODO lz4 stuff
 }
 
-void trace_convert_drcachesim(COMMAND_HANDLER_ARGS)
+// TODO move main loops here into drcachesim source file?
+void trace_convert_drcachesim_vaddr(COMMAND_HANDLER_ARGS)
 {
     if (num_args != 2)
     {
@@ -366,7 +367,7 @@ void trace_convert_drcachesim(COMMAND_HANDLER_ARGS)
         assert(sizeof(current_entry) <= INT_MAX);
         if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
 
-        write_drcachesim_trace_entry(output_file, page_table, current_entry);
+        write_drcachesim_trace_entry_vaddr(output_file, page_table, current_entry);
     }
 
     write_drcachesim_footer(output_file);
@@ -377,6 +378,43 @@ void trace_convert_drcachesim(COMMAND_HANDLER_ARGS)
     gzclose(output_file);
 }
 
+void trace_convert_drcachesim_paddr(COMMAND_HANDLER_ARGS)
+{
+    if (num_args != 2)
+    {
+        printf("Usage: %s %s <input custom trace file> <output drcachesim trace file>\n", exe_name, cmd_name);
+        quit();
+    }
+
+    char * input_trace_filename = args[0];
+    char * output_trace_filename = args[1];
+
+    if (file_exists(output_trace_filename))
+    {
+        if (!confirm_overwrite_file(output_trace_filename)) quit();
+    }
+
+    gzFile input_file = gzopen(input_trace_filename, "rb");
+    gzFile output_file = gzopen(output_trace_filename, "wb");
+
+    write_drcachesim_header(output_file);
+
+    while (true)
+    {
+        custom_trace_entry_t current_entry;
+        int bytes_read = gzread(input_file, &current_entry, sizeof(current_entry));
+
+        assert(sizeof(current_entry) <= INT_MAX);
+        if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
+
+        write_drcachesim_trace_entry_paddr(output_file, current_entry);
+    }
+
+    write_drcachesim_footer(output_file);
+
+    gzclose(input_file);
+    gzclose(output_file);
+}
 
 
 void trace_get_initial_tags(COMMAND_HANDLER_ARGS)

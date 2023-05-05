@@ -9,7 +9,7 @@ CPP_OBJ_FILE_DEBUG := $(BUILD_DIR)/cpp_debug.o
 CPP_OBJ_FILE_RELEASE := $(BUILD_DIR)/cpp_release.o
 
 C_SRC_FILES := $(wildcard $(SRC_DIR)/*.c)
-EXE_FILE := tracesim
+EXE_FILE := traceconv
 
 INC_DIR := inc
 

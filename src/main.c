@@ -52,8 +52,12 @@ int main(int argc, char * argv[])
             handler_missing // TODO
         },
         {
-            string_lit("convert-drcachesim"),
-            trace_convert_drcachesim
+            string_lit("convert-drcachesim-vaddr"),
+            trace_convert_drcachesim_vaddr
+        },
+        {
+            string_lit("convert-drcachesim-paddr"),
+            trace_convert_drcachesim_paddr
         },
         {
             string_lit("get-initial-tags"),
