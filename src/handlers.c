@@ -317,11 +317,17 @@ void trace_convert(COMMAND_HANDLER_ARGS)
         if (!confirm_overwrite_file(output_filename)) quit();
     }
 
+    // TODO functions for getting type based on file extension?
+
+    // trace_reader input_trace =
+    //     trace_reader_open(arena, input_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
+    trace_writer output_trace =
+        trace_writer_open(arena, output_filename, TRACE_WRITER_TYPE_LZ4);
+
     trace_reader input_trace =
         trace_reader_open(arena, input_filename, TRACE_READER_TYPE_LZ4);
-
-    trace_writer output_trace =
-        trace_writer_open(arena, output_filename, TRACE_WRITER_TYPE_GZIP);
+    // trace_writer output_trace =
+    //     trace_writer_open(arena, output_filename, TRACE_WRITER_TYPE_GZIP);
 
     trace_stats_t global_stats = {0};
 
@@ -337,6 +343,7 @@ void trace_convert(COMMAND_HANDLER_ARGS)
 
     print_trace_stats(&global_stats);
 
+    // NOTE must be careful to close those lz4 writers in particular
     trace_reader_close(&input_trace);
     trace_writer_close(&output_trace);
 }

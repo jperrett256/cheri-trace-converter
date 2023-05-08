@@ -50,7 +50,12 @@ enum trace_writer_type
 typedef struct lz4_writer lz4_writer;
 struct lz4_writer
 {
-    // TODO
+    FILE * file;
+    LZ4F_cctx * ctx;
+    size_t src_size;
+    u8 * src_buf;
+    u8 * dst_buf;
+    size_t dst_capacity;
 };
 
 typedef struct trace_writer trace_writer;

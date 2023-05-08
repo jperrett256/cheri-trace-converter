@@ -1,7 +1,7 @@
 #include "io.h"
 #include "utils.h"
 
-#define LZ4_BUFFER_SIZE KILOBYTES(1) // MEGABYTES(1)
+#define LZ4_BUFFER_SIZE MEGABYTES(1)
 static_assert(LZ4_BUFFER_SIZE >= LZ4F_HEADER_SIZE_MAX, "Inappropriate LZ4 buffer size.");
 
 
@@ -34,12 +34,10 @@ static void lz4_reader_open(arena_t * arena, char * filename, lz4_reader * state
 {
     // TODO create own arena instead?
 
-    LZ4F_errorCode_t lz4_error;
-
     state->file = fopen(filename, "rb");
     assert(state->file);
 
-    lz4_error = LZ4F_createDecompressionContext(&state->ctx, LZ4F_VERSION);
+    LZ4F_errorCode_t lz4_error = LZ4F_createDecompressionContext(&state->ctx, LZ4F_VERSION);
     assert(!LZ4F_isError(lz4_error));
 
     state->src_buf = arena_push_array(arena, u8, LZ4_BUFFER_SIZE);
@@ -228,6 +226,103 @@ void trace_reader_close(trace_reader * reader)
 }
 
 
+void lz4_writer_open(arena_t * arena, char * filename, lz4_writer * state)
+{
+    state->file = fopen(filename, "wb");
+    assert(state->file);
+
+    // TODO use different filename and rename on close, to ensure that failing to close is obvious
+
+    LZ4F_errorCode_t lz4_error = LZ4F_createCompressionContext(&state->ctx, LZ4F_VERSION);
+    assert(!LZ4F_isError(lz4_error));
+
+    LZ4F_preferences_t lz4_prefs = // TODO
+    {
+        {
+            LZ4F_max4MB,
+            LZ4F_blockLinked, // NOTE this affects ability to randomly access traces
+            LZ4F_noContentChecksum,
+            LZ4F_frame,
+            0, /* content size unknown */
+            0, /* no dictID provided */
+            LZ4F_noBlockChecksum
+        },
+        0, /* default compression level */
+        0, /* disable "always flush" */
+        0, /* do not favor decompression speed over compression ratio */
+        { 0, 0, 0 } /* reserved */
+    };
+
+    state->src_size = 0;
+    state->src_buf = arena_push_array(arena, u8, LZ4_BUFFER_SIZE);
+
+    state->dst_capacity = LZ4F_compressBound(LZ4_BUFFER_SIZE, &lz4_prefs);
+    state->dst_buf = arena_push_array(arena, u8, state->dst_capacity);
+
+    size_t header_size = LZ4F_compressBegin(state->ctx, state->dst_buf, state->dst_capacity, &lz4_prefs);
+    assert(!LZ4F_isError(header_size));
+
+    size_t bytes_written = fwrite(state->dst_buf, 1, header_size, state->file);
+    assert(bytes_written == header_size);
+}
+
+static void lz4_writer_compress(lz4_writer * state)
+{
+    assert(state->src_size > 0);
+
+    size_t compressed_size = LZ4F_compressUpdate(state->ctx,
+        state->dst_buf, state->dst_capacity, state->src_buf, state->src_size, NULL);
+    assert(!LZ4F_isError(compressed_size));
+
+    size_t bytes_written = fwrite(state->dst_buf, 1, compressed_size, state->file);
+    assert(bytes_written == compressed_size);
+
+    state->src_size = 0;
+}
+
+void lz4_writer_emit_entry(lz4_writer * state, const void * entry, size_t entry_size)
+{
+    assert(state->file);
+    assert(entry_size <= LZ4_BUFFER_SIZE);
+
+    // TODO what happens if you just call compressUpdate with the entry (no src buffer)?
+    if (state->src_size + entry_size > LZ4_BUFFER_SIZE)
+        lz4_writer_compress(state);
+
+    assert(entry_size <= INT64_MAX);
+    const u8 * entry_ptr = (const u8 *) entry;
+    for (i64 i = 0; i < (i64) entry_size; i++)
+    {
+        assert(state->src_size + i < LZ4_BUFFER_SIZE);
+        state->src_buf[state->src_size + i] = entry_ptr[i];
+    }
+    state->src_size += entry_size;
+}
+
+void lz4_writer_close(lz4_writer * state)
+{
+    assert(state->file);
+
+    if (state->src_size > 0)
+        lz4_writer_compress(state);
+
+    {
+        size_t compressed_size = LZ4F_compressEnd(state->ctx, state->dst_buf, state->dst_capacity, NULL);
+        assert(!LZ4F_isError(compressed_size));
+
+        size_t bytes_written = fwrite(state->dst_buf, 1, compressed_size, state->file);
+        assert(bytes_written == compressed_size);
+    }
+
+    assert(state->ctx);
+    LZ4F_errorCode_t lz4_error = LZ4F_freeCompressionContext(state->ctx);
+    assert(!LZ4F_isError(lz4_error));
+    state->ctx = NULL;
+
+    fclose(state->file);
+    state->file = NULL;
+}
+
 trace_writer trace_writer_open(arena_t * arena, char * filename, u8 type)
 {
     trace_writer writer = {0};
@@ -248,8 +343,7 @@ trace_writer trace_writer_open(arena_t * arena, char * filename, u8 type)
         } break;
         case TRACE_WRITER_TYPE_LZ4:
         {
-            // lz4_writer_open(arena, filename, &writer.as.lz4);
-            assert(false); // TODO
+            lz4_writer_open(arena, filename, &writer.as.lz4);
         } break;
         default: assert(!"Impossible");
     }
@@ -264,17 +358,18 @@ void trace_writer_emit(trace_writer * writer, const void * entry, size_t entry_s
         case TRACE_WRITER_TYPE_UNCOMPRESSED:
         {
             assert(writer->as.uncompressed);
-            fwrite(entry, entry_size, 1, writer->as.uncompressed);
+            size_t bytes_written = fwrite(entry, 1, entry_size, writer->as.uncompressed);
+            assert(bytes_written == entry_size);
         } break;
         case TRACE_WRITER_TYPE_GZIP:
         {
             assert(writer->as.gzip);
-            gzwrite(writer->as.gzip, entry, entry_size);
+            int bytes_written = gzwrite(writer->as.gzip, entry, entry_size);
+            assert(bytes_written == entry_size);
         } break;
         case TRACE_WRITER_TYPE_LZ4:
         {
-            // lz4_writer_emit_entry(&writer->as.lz4, entry);
-            assert(false); // TODO
+            lz4_writer_emit_entry(&writer->as.lz4, entry, entry_size);
         } break;
         default: assert(!"Impossible");
     }
@@ -298,8 +393,7 @@ void trace_writer_close(trace_writer * writer)
         } break;
         case TRACE_WRITER_TYPE_LZ4:
         {
-            // lz4_writer_close(&writer->as.lz4);
-            assert(false); // TODO
+            lz4_writer_close(&writer->as.lz4);
         } break;
         default: assert(!"Impossible");
     }
