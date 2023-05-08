@@ -9,14 +9,12 @@
 EXTERN_C
 
 #include "jdp.h"
-#include "trace.h"
 #include "common.h"
-#include "hashmap.h"
 #include "drcachesim.h"
 
-void write_drcachesim_header(gzFile file)
+void write_drcachesim_header(trace_writer * writer)
 {
-    assert(file);
+    assert(writer);
 
     // add header and other initial marker entries
     trace_entry_t header =
@@ -49,17 +47,17 @@ void write_drcachesim_header(gzFile file)
         .addr = PAGE_SIZE
     };
 
-    gzwrite(file, &header, sizeof(header));
-    gzwrite(file, &thread, sizeof(thread));
-    gzwrite(file, &pid, sizeof(pid));
-    gzwrite(file, &timestamp, sizeof(timestamp));
-    gzwrite(file, &cpuid, sizeof(cpuid));
-    gzwrite(file, &page_size, sizeof(page_size));
+    trace_writer_emit(writer, &header, sizeof(header));
+    trace_writer_emit(writer, &thread, sizeof(thread));
+    trace_writer_emit(writer, &pid, sizeof(pid));
+    trace_writer_emit(writer, &timestamp, sizeof(timestamp));
+    trace_writer_emit(writer, &cpuid, sizeof(cpuid));
+    trace_writer_emit(writer, &page_size, sizeof(page_size));
 }
 
-void write_drcachesim_footer(gzFile file)
+void write_drcachesim_footer(trace_writer * writer)
 {
-    assert(file);
+    assert(writer);
 
     trace_entry_t footer =
     {
@@ -68,7 +66,7 @@ void write_drcachesim_footer(gzFile file)
         .addr = 0
     };
 
-    gzwrite(file, &footer, sizeof(footer));
+    trace_writer_emit(writer, &footer, sizeof(footer));
 }
 
 static unsigned short get_drcachesim_type(uint8_t type)
@@ -96,7 +94,7 @@ static unsigned short get_drcachesim_type(uint8_t type)
     return -1;
 }
 
-static void write_drcachesim_tag_entry(gzFile file, uint8_t type, uint8_t tag)
+static void write_drcachesim_tag_entry(trace_writer * writer, uint8_t type, uint8_t tag)
 {
     if (type == CUSTOM_TRACE_TYPE_INSTR) assert(tag == 0);
     if (type == CUSTOM_TRACE_TYPE_STORE) assert(tag == 0);
@@ -114,11 +112,11 @@ static void write_drcachesim_tag_entry(gzFile file, uint8_t type, uint8_t tag)
             .addr = tag
         };
 
-        gzwrite(file, &tag_entry, sizeof(tag_entry));
+        trace_writer_emit(writer, &tag_entry, sizeof(tag_entry));
     }
 }
 
-static void write_drcachesim_page_mapping_entries(gzFile file, u64 vaddr, u64 paddr)
+static void write_drcachesim_page_mapping_entries(trace_writer * writer, u64 vaddr, u64 paddr)
 {
     trace_entry_t paddr_mapping_entry =
     {
@@ -133,13 +131,13 @@ static void write_drcachesim_page_mapping_entries(gzFile file, u64 vaddr, u64 pa
         .addr = vaddr
     };
 
-    gzwrite(file, &paddr_mapping_entry, sizeof(paddr_mapping_entry));
-    gzwrite(file, &vaddr_mapping_entry, sizeof(vaddr_mapping_entry));
+    trace_writer_emit(writer, &paddr_mapping_entry, sizeof(paddr_mapping_entry));
+    trace_writer_emit(writer, &vaddr_mapping_entry, sizeof(vaddr_mapping_entry));
 }
 
-void write_drcachesim_trace_entry_vaddr(gzFile file, map_u64 page_table, custom_trace_entry_t custom_entry)
+void write_drcachesim_trace_entry_vaddr(trace_writer * writer, map_u64 page_table, custom_trace_entry_t custom_entry)
 {
-    assert(file);
+    assert(writer);
 
     u64 vaddr = custom_entry.vaddr;
     u64 paddr = custom_entry.paddr;
@@ -153,7 +151,7 @@ void write_drcachesim_trace_entry_vaddr(gzFile file, map_u64 page_table, custom_
             {
                 map_u64_set(page_table, get_page_start(vaddr), get_page_start(paddr));
 
-                write_drcachesim_page_mapping_entries(file, vaddr, paddr);
+                write_drcachesim_page_mapping_entries(writer, vaddr, paddr);
             }
         }
     }
@@ -161,7 +159,7 @@ void write_drcachesim_trace_entry_vaddr(gzFile file, map_u64 page_table, custom_
     {
         map_u64_set(page_table, get_page_start(vaddr), get_page_start(paddr));
 
-        write_drcachesim_page_mapping_entries(file, vaddr, paddr);
+        write_drcachesim_page_mapping_entries(writer, vaddr, paddr);
     }
     else
     {
@@ -175,10 +173,10 @@ void write_drcachesim_trace_entry_vaddr(gzFile file, map_u64 page_table, custom_
             .addr = vaddr
         };
 
-        gzwrite(file, &no_mapping_entry, sizeof(no_mapping_entry));
+        trace_writer_emit(writer, &no_mapping_entry, sizeof(no_mapping_entry));
     }
 
-    write_drcachesim_tag_entry(file, custom_entry.type, custom_entry.tag);
+    write_drcachesim_tag_entry(writer, custom_entry.type, custom_entry.tag);
 
     trace_entry_t drcachesim_entry;
     drcachesim_entry.type = get_drcachesim_type(custom_entry.type);
@@ -186,12 +184,12 @@ void write_drcachesim_trace_entry_vaddr(gzFile file, map_u64 page_table, custom_
     drcachesim_entry.size = custom_entry.size;
     drcachesim_entry.addr = custom_entry.vaddr;
 
-    gzwrite(file, &drcachesim_entry, sizeof(drcachesim_entry));
+    trace_writer_emit(writer, &drcachesim_entry, sizeof(drcachesim_entry));
 }
 
-void write_drcachesim_trace_entry_paddr(gzFile file, custom_trace_entry_t custom_entry)
+void write_drcachesim_trace_entry_paddr(trace_writer * writer, custom_trace_entry_t custom_entry)
 {
-    write_drcachesim_tag_entry(file, custom_entry.type, custom_entry.tag);
+    write_drcachesim_tag_entry(writer, custom_entry.type, custom_entry.tag);
 
     trace_entry_t drcachesim_entry;
     drcachesim_entry.type = get_drcachesim_type(custom_entry.type);
@@ -199,7 +197,7 @@ void write_drcachesim_trace_entry_paddr(gzFile file, custom_trace_entry_t custom
     drcachesim_entry.size = custom_entry.size;
     drcachesim_entry.addr = custom_entry.paddr;
 
-    gzwrite(file, &drcachesim_entry, sizeof(drcachesim_entry));
+    trace_writer_emit(writer, &drcachesim_entry, sizeof(drcachesim_entry));
 }
 
 EXTERN_C_END

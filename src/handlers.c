@@ -6,6 +6,7 @@
 #include "hashmap.h"
 #include "drcachesim.h"
 #include "simulator.h"
+#include "io.h"
 
 #include <stdio.h>
 #include <zlib.h>
@@ -166,30 +167,6 @@ static void print_trace_stats(trace_stats_t * stats)
     printf(INDENT4 "CSTOREs with invalid paddr: %lu\n", stats->num_CSTOREs_invalid_paddr);
 }
 
-static bool gz_at_eof(int bytes_read, int expected_bytes)
-{
-    if (bytes_read < 0)
-    {
-        printf("ERROR: error reading gzip file.\n");
-        // TODO call gzerror?
-        quit();
-    }
-
-
-    if (bytes_read < expected_bytes)
-    {
-        assert(bytes_read >= 0);
-        if (bytes_read != 0)
-        {
-            printf("ERROR: attempted to read %d bytes, was only able to read %d bytes.\n", expected_bytes, bytes_read);
-        }
-        return true;
-    }
-
-    return false;
-}
-
-
 void trace_get_info(COMMAND_HANDLER_ARGS)
 {
     (void) arena;
@@ -202,27 +179,22 @@ void trace_get_info(COMMAND_HANDLER_ARGS)
 
     char * input_filename = args[0];
 
-    gzFile input_trace_file = gzopen(input_filename, "rb");
-    assert(input_trace_file);
-
-    // TODO tune buffer size with gzbuffer? manual buffering?
+    trace_reader input_trace =
+        trace_reader_open(arena, input_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
 
     trace_stats_t global_stats = {0};
 
     while (true)
     {
-        custom_trace_entry_t current_entry = {0};
-        int bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
-
-        assert(sizeof(current_entry) <= INT_MAX);
-        if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
+        custom_trace_entry_t current_entry;
+        if (!trace_reader_get(&input_trace, &current_entry, sizeof(current_entry))) break;
 
         update_trace_stats(&global_stats, current_entry);
     }
 
     print_trace_stats(&global_stats);
 
-    gzclose(input_trace_file);
+    trace_reader_close(&input_trace);
 }
 
 
@@ -243,11 +215,11 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
         quit();
     }
 
-    gzFile input_trace_file = gzopen(input_filename, "rb");
-    assert(input_trace_file);
+    trace_reader input_trace =
+        trace_reader_open(arena, input_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
 
-    gzFile output_trace_file = gzopen(output_filename, "wb");
-    assert(output_trace_file);
+    trace_writer output_trace =
+        trace_writer_open(arena, output_filename, TRACE_WRITER_TYPE_GZIP);
 
     map_u64 page_table = map_u64_create();
     set_u64 dbg_pages_changed_mapping = set_u64_create();
@@ -262,11 +234,8 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
 
     while (true)
     {
-        custom_trace_entry_t current_entry = {0};
-        int bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
-
-        assert(sizeof(current_entry) <= INT_MAX);
-        if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
+        custom_trace_entry_t current_entry;
+        if (!trace_reader_get(&input_trace, &current_entry, sizeof(current_entry))) break;
 
         update_trace_stats(&global_stats_before, current_entry);
 
@@ -305,7 +274,8 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
             }
         }
 
-        gzwrite(output_trace_file, &current_entry, sizeof(current_entry));
+        trace_writer_emit(&output_trace, &current_entry, sizeof(current_entry));
+
         update_trace_stats(&global_stats_after, current_entry);
     }
 
@@ -323,30 +293,12 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
     printf("Pages with mapping changes: %lu\n", set_u64_size(dbg_pages_changed_mapping));
     printf("Pages without paddr mappings: %lu\n", set_u64_size(dbg_pages_without_mapping));
 
-    gzclose(input_trace_file);
-    gzclose(output_trace_file);
+    trace_reader_close(&input_trace);
+    trace_writer_close(&output_trace);
 
     map_u64_cleanup(&page_table);
     set_u64_cleanup(&dbg_pages_changed_mapping);
     set_u64_cleanup(&dbg_pages_without_mapping);
-}
-
-#include <lz4frame.h>
-
-#define LZ4_BUFFER_SIZE KILOBYTES(1) // MEGABYTES(1)
-static_assert(LZ4_BUFFER_SIZE >= LZ4F_HEADER_SIZE_MAX, "Inappropriate LZ4 buffer size.");
-
-static void memmove_down(void * dst, const void * src, i64 size)
-{
-    assert(size >= 0);
-    assert(dst <= src);
-
-    u8 * dst_u8 = (u8 *) dst;
-    const u8 * src_u8 = (const u8 *) src;
-    for (i64 i = size - 1; i >= 0; i--)
-    {
-        dst_u8[i] = src_u8[i];
-    }
 }
 
 void trace_convert(COMMAND_HANDLER_ARGS)
@@ -365,84 +317,28 @@ void trace_convert(COMMAND_HANDLER_ARGS)
         if (!confirm_overwrite_file(output_filename)) quit();
     }
 
-    FILE * input_file = fopen(input_filename, "rb");
-    gzFile output_file = gzopen(output_filename, "wb");
+    trace_reader input_trace =
+        trace_reader_open(arena, input_filename, TRACE_READER_TYPE_LZ4);
 
-    LZ4F_dctx * lz4_ctx;
-    LZ4F_errorCode_t lz4_error;
-    lz4_error = LZ4F_createDecompressionContext(&lz4_ctx, LZ4F_VERSION);
-    assert(!LZ4F_isError(lz4_error));
+    trace_writer output_trace =
+        trace_writer_open(arena, output_filename, TRACE_WRITER_TYPE_GZIP);
 
-    // TODO use LZ4F_getFrameInfo(lz4_ctx, /* TODO */)
     trace_stats_t global_stats = {0};
-
-    u8 * src_buf = arena_push_array(arena, u8, LZ4_BUFFER_SIZE);
-    u8 * dst_buf = arena_push_array(arena, u8, LZ4_BUFFER_SIZE); // TODO test just using current_entry as the destination buffer
-    u8 * src_current = src_buf;
-    u8 * dst_current = dst_buf;
-    size_t src_remaining = 0;
-    size_t dst_remaining = 0;
-    bool src_eof = false;
 
     while (true)
     {
         custom_trace_entry_t current_entry;
-
-        while (dst_remaining < sizeof(current_entry))
-        {
-            if (src_eof)
-            {
-                assert(dst_remaining == 0);
-                goto trace_convert__end;
-            }
-
-            if (src_remaining == 0 && !src_eof)
-            {
-                src_remaining = fread(src_buf, 1, LZ4_BUFFER_SIZE, input_file);
-                assert(!ferror(input_file));
-                if (src_remaining == 0)
-                    src_eof = true;
-                src_current = src_buf;
-            }
-
-            if (dst_current != dst_buf)
-            {
-                memmove_down(dst_buf, dst_current, dst_remaining);
-                dst_current = dst_buf;
-            }
-
-            size_t src_size = src_remaining;
-            size_t dst_size = LZ4_BUFFER_SIZE - dst_remaining;
-
-            assert(dst_current == dst_buf);
-            size_t src_size_expected = LZ4F_decompress(lz4_ctx, &dst_buf[dst_remaining], &dst_size, src_current, &src_size, NULL);
-            assert(!LZ4F_isError(src_size_expected));
-            src_remaining -= src_size;
-            src_current += src_size;
-            dst_remaining += dst_size;
-
-            // TODO do sth with src_size_expected?
-        }
-
-        assert(dst_remaining >= sizeof(current_entry));
-        current_entry = *((custom_trace_entry_t *) dst_current);
-        dst_current += sizeof(current_entry);
-        dst_remaining -= sizeof(current_entry);
+        if (!trace_reader_get(&input_trace, &current_entry, sizeof(current_entry))) break;
 
         update_trace_stats(&global_stats, current_entry);
 
-        // TODO process entry
-        gzwrite(output_file, &current_entry, sizeof(current_entry));
+        trace_writer_emit(&output_trace, &current_entry, sizeof(current_entry));
     }
-trace_convert__end:
 
     print_trace_stats(&global_stats);
 
-    lz4_error = LZ4F_freeDecompressionContext(lz4_ctx);
-
-    fclose(input_file);
-
-    gzclose(output_file);
+    trace_reader_close(&input_trace);
+    trace_writer_close(&output_trace);
 }
 
 // TODO move main loops here into drcachesim source file?
@@ -462,30 +358,30 @@ void trace_convert_drcachesim_vaddr(COMMAND_HANDLER_ARGS)
         if (!confirm_overwrite_file(output_trace_filename)) quit();
     }
 
-    gzFile input_file = gzopen(input_trace_filename, "rb");
-    gzFile output_file = gzopen(output_trace_filename, "wb");
+    trace_reader input_trace =
+        trace_reader_open(arena, input_trace_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
 
-    write_drcachesim_header(output_file);
+    trace_writer output_trace =
+        trace_writer_open(arena, output_trace_filename, TRACE_WRITER_TYPE_GZIP);
+
+    write_drcachesim_header(&output_trace);
 
     map_u64 page_table = map_u64_create();
 
     while (true)
     {
         custom_trace_entry_t current_entry;
-        int bytes_read = gzread(input_file, &current_entry, sizeof(current_entry));
+        if (!trace_reader_get(&input_trace, &current_entry, sizeof(current_entry))) break;
 
-        assert(sizeof(current_entry) <= INT_MAX);
-        if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
-
-        write_drcachesim_trace_entry_vaddr(output_file, page_table, current_entry);
+        write_drcachesim_trace_entry_vaddr(&output_trace, page_table, current_entry);
     }
 
-    write_drcachesim_footer(output_file);
+    write_drcachesim_footer(&output_trace);
 
     map_u64_cleanup(&page_table);
 
-    gzclose(input_file);
-    gzclose(output_file);
+    trace_reader_close(&input_trace);
+    trace_writer_close(&output_trace);
 }
 
 void trace_convert_drcachesim_paddr(COMMAND_HANDLER_ARGS)
@@ -504,26 +400,26 @@ void trace_convert_drcachesim_paddr(COMMAND_HANDLER_ARGS)
         if (!confirm_overwrite_file(output_trace_filename)) quit();
     }
 
-    gzFile input_file = gzopen(input_trace_filename, "rb");
-    gzFile output_file = gzopen(output_trace_filename, "wb");
+    trace_reader input_trace =
+        trace_reader_open(arena, input_trace_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
 
-    write_drcachesim_header(output_file);
+    trace_writer output_trace =
+        trace_writer_open(arena, output_trace_filename, TRACE_WRITER_TYPE_GZIP);
+
+    write_drcachesim_header(&output_trace);
 
     while (true)
     {
         custom_trace_entry_t current_entry;
-        int bytes_read = gzread(input_file, &current_entry, sizeof(current_entry));
+        if (!trace_reader_get(&input_trace, &current_entry, sizeof(current_entry))) break;
 
-        assert(sizeof(current_entry) <= INT_MAX);
-        if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
-
-        write_drcachesim_trace_entry_paddr(output_file, current_entry);
+        write_drcachesim_trace_entry_paddr(&output_trace, current_entry);
     }
 
-    write_drcachesim_footer(output_file);
+    write_drcachesim_footer(&output_trace);
 
-    gzclose(input_file);
-    gzclose(output_file);
+    trace_reader_close(&input_trace);
+    trace_writer_close(&output_trace);
 }
 
 
@@ -544,8 +440,8 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
         quit();
     }
 
-    gzFile input_trace_file = gzopen(input_trace_filename, "rb");
-    assert(input_trace_file);
+    trace_reader input_trace =
+        trace_reader_open(arena, input_trace_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
 
     FILE * initial_tags_file = fopen(initial_tags_filename, "wb");
     assert(initial_tags_file);
@@ -579,11 +475,8 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
 
     while (true)
     {
-        custom_trace_entry_t current_entry = {0};
-        int bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
-
-        assert(sizeof(current_entry) <= INT_MAX);
-        if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
+        custom_trace_entry_t current_entry;
+        if (!trace_reader_get(&input_trace, &current_entry, sizeof(current_entry))) break;
 
         if (!check_paddr_valid(current_entry.paddr))
         {
@@ -696,10 +589,10 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
     printf("Number of times tags were incorrect (LOADs): %ld\n", dbg_assumed_tag_incorrect_LOADs);
     printf("Number of times tags were incorrect (CLOADs): %ld\n", dbg_assumed_tag_incorrect_CLOADs);
 
-    gzclose(input_trace_file);
-
     fwrite(initial_tag_state, 1, tag_table_size, initial_tags_file);
     fclose(initial_tags_file);
+
+    trace_reader_close(&input_trace);
 
     /* TODO
      * create 16 MiB buffer of tags, set to zero, that we'll update over time
@@ -769,18 +662,16 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
     }
     printf("\n");
 
-    gzFile input_trace_file = gzopen(input_trace_filename, "rb");
+    trace_reader input_trace =
+        trace_reader_open(arena, input_trace_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
 
     i64 dbg_paddrs_missing = 0;
     i64 dbg_paddrs_invalid = 0;
 
     while (true)
     {
-        custom_trace_entry_t current_entry = {0};
-        int bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
-
-        assert(sizeof(current_entry) <= INT_MAX);
-        if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
+        custom_trace_entry_t current_entry;
+        if (!trace_reader_get(&input_trace, &current_entry, sizeof(current_entry))) break;
 
         /* NOTE can just assume all caches are PIPT.
          * VIPT relies on the fact that the lowest bits of the physical and virtual addresses are the same,
@@ -880,6 +771,8 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
         device_cleanup(all_devices[i]);
     }
 
+    trace_reader_close(&input_trace);
+
     // TODO intialise leaf tag table from initial tag state file
     // TODO initialise root tag table from the leaf tag table
     /* TODO do I need the root tag table or can that be implicit?
@@ -955,7 +848,8 @@ void trace_simulate_uncompressed(COMMAND_HANDLER_ARGS)
 
     device_t * tag_controller = tag_cache_init(arena, initial_tags_filename, KILOBYTES(32), 4);
 
-    gzFile input_trace_file = gzopen(input_trace_filename, "rb");
+    trace_reader input_trace =
+        trace_reader_open(arena, input_trace_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
 
     printf("Simulating with following configuration:\n");
     device_print_configuration(tag_controller);
@@ -963,11 +857,8 @@ void trace_simulate_uncompressed(COMMAND_HANDLER_ARGS)
 
     while (true)
     {
-        tag_cache_request_t current_entry = {0};
-        int bytes_read = gzread(input_trace_file, &current_entry, sizeof(current_entry));
-
-        assert(sizeof(current_entry) <= INT_MAX);
-        if (gz_at_eof(bytes_read, sizeof(current_entry))) break;
+        tag_cache_request_t current_entry;
+        if (!trace_reader_get(&input_trace, &current_entry, sizeof(current_entry))) break;
 
         assert(current_entry.size == CACHE_LINE_SIZE);
 
@@ -999,4 +890,6 @@ void trace_simulate_uncompressed(COMMAND_HANDLER_ARGS)
     device_print_statistics(tag_controller);
     device_cleanup(tag_controller);
     printf("\n");
+
+    trace_reader_close(&input_trace);
 }
