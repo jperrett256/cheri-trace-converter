@@ -14,6 +14,31 @@
 #define FMT_ADDR "%016" PRIx64
 
 
+// static char * get_type_string(u8 type)
+// {
+//     switch (type)
+//     {
+//         case CUSTOM_TRACE_TYPE_INSTR:
+//             return "INSTR";
+//         case CUSTOM_TRACE_TYPE_LOAD:
+//             return "LOAD";
+//         case CUSTOM_TRACE_TYPE_STORE:
+//             return "STORE";
+//         case CUSTOM_TRACE_TYPE_CLOAD:
+//             return "CLOAD";
+//         case CUSTOM_TRACE_TYPE_CSTORE:
+//             return "CSTORE";
+//         default: assert(!"Impossible.");
+//     }
+// }
+
+// static void debug_print_entry(custom_trace_entry_t entry)
+// {
+//     printf("%s [ vaddr: " FMT_ADDR ", paddr: " FMT_ADDR ", size: %hu ]\n",
+//         get_type_string(entry.type), entry.vaddr, entry.paddr, entry.size);
+// }
+
+
 typedef struct trace_stats_t trace_stats_t;
 struct trace_stats_t
 {
@@ -140,30 +165,6 @@ static void print_trace_stats(trace_stats_t * stats)
     printf(INDENT4 "CSTOREs without paddr: %lu\n", stats->num_CSTOREs_no_paddr);
     printf(INDENT4 "CSTOREs with invalid paddr: %lu\n", stats->num_CSTOREs_invalid_paddr);
 }
-
-// static char * get_type_string(u8 type)
-// {
-//     switch (type)
-//     {
-//         case CUSTOM_TRACE_TYPE_INSTR:
-//             return "INSTR";
-//         case CUSTOM_TRACE_TYPE_LOAD:
-//             return "LOAD";
-//         case CUSTOM_TRACE_TYPE_STORE:
-//             return "STORE";
-//         case CUSTOM_TRACE_TYPE_CLOAD:
-//             return "CLOAD";
-//         case CUSTOM_TRACE_TYPE_CSTORE:
-//             return "CSTORE";
-//         default: assert(!"Impossible.");
-//     }
-// }
-
-// static void debug_print_entry(custom_trace_entry_t entry)
-// {
-//     printf("%s [ vaddr: " FMT_ADDR ", paddr: " FMT_ADDR ", size: %hu ]\n",
-//         get_type_string(entry.type), entry.vaddr, entry.paddr, entry.size);
-// }
 
 static bool gz_at_eof(int bytes_read, int expected_bytes)
 {
@@ -330,9 +331,118 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
     set_u64_cleanup(&dbg_pages_without_mapping);
 }
 
+#include <lz4frame.h>
+
+#define LZ4_BUFFER_SIZE KILOBYTES(1) // MEGABYTES(1)
+static_assert(LZ4_BUFFER_SIZE >= LZ4F_HEADER_SIZE_MAX, "Inappropriate LZ4 buffer size.");
+
+static void memmove_down(void * dst, const void * src, i64 size)
+{
+    assert(size >= 0);
+    assert(dst <= src);
+
+    u8 * dst_u8 = (u8 *) dst;
+    const u8 * src_u8 = (const u8 *) src;
+    for (i64 i = size - 1; i >= 0; i--)
+    {
+        dst_u8[i] = src_u8[i];
+    }
+}
+
 void trace_convert(COMMAND_HANDLER_ARGS)
 {
-    // TODO lz4 stuff
+    if (num_args != 2)
+    {
+        printf("Usage: %s %s <input lz4 file> <output gz file>\n", exe_name, cmd_name); // TODO
+        quit();
+    }
+
+    char * input_filename = args[0];
+    char * output_filename = args[1];
+
+    if (file_exists(output_filename))
+    {
+        if (!confirm_overwrite_file(output_filename)) quit();
+    }
+
+    FILE * input_file = fopen(input_filename, "rb");
+    gzFile output_file = gzopen(output_filename, "wb");
+
+    LZ4F_dctx * lz4_ctx;
+    LZ4F_errorCode_t lz4_error;
+    lz4_error = LZ4F_createDecompressionContext(&lz4_ctx, LZ4F_VERSION);
+    assert(!LZ4F_isError(lz4_error));
+
+    // TODO use LZ4F_getFrameInfo(lz4_ctx, /* TODO */)
+    trace_stats_t global_stats = {0};
+
+    u8 * src_buf = arena_push_array(arena, u8, LZ4_BUFFER_SIZE);
+    u8 * dst_buf = arena_push_array(arena, u8, LZ4_BUFFER_SIZE); // TODO test just using current_entry as the destination buffer
+    u8 * src_current = src_buf;
+    u8 * dst_current = dst_buf;
+    size_t src_remaining = 0;
+    size_t dst_remaining = 0;
+    bool src_eof = false;
+
+    while (true)
+    {
+        custom_trace_entry_t current_entry;
+
+        while (dst_remaining < sizeof(current_entry))
+        {
+            if (src_eof)
+            {
+                assert(dst_remaining == 0);
+                goto trace_convert__end;
+            }
+
+            if (src_remaining == 0 && !src_eof)
+            {
+                src_remaining = fread(src_buf, 1, LZ4_BUFFER_SIZE, input_file);
+                assert(!ferror(input_file));
+                if (src_remaining == 0)
+                    src_eof = true;
+                src_current = src_buf;
+            }
+
+            if (dst_current != dst_buf)
+            {
+                memmove_down(dst_buf, dst_current, dst_remaining);
+                dst_current = dst_buf;
+            }
+
+            size_t src_size = src_remaining;
+            size_t dst_size = LZ4_BUFFER_SIZE - dst_remaining;
+
+            assert(dst_current == dst_buf);
+            size_t src_size_expected = LZ4F_decompress(lz4_ctx, &dst_buf[dst_remaining], &dst_size, src_current, &src_size, NULL);
+            assert(!LZ4F_isError(src_size_expected));
+            src_remaining -= src_size;
+            src_current += src_size;
+            dst_remaining += dst_size;
+
+            // TODO do sth with src_size_expected?
+        }
+
+        assert(dst_remaining >= sizeof(current_entry));
+        current_entry = *((custom_trace_entry_t *) dst_current);
+        dst_current += sizeof(current_entry);
+        dst_remaining -= sizeof(current_entry);
+
+        update_trace_stats(&global_stats, current_entry);
+
+        // TODO process entry
+        gzwrite(output_file, &current_entry, sizeof(current_entry));
+    }
+trace_convert__end:
+
+    print_trace_stats(&global_stats);
+
+    lz4_error = LZ4F_freeDecompressionContext(lz4_ctx);
+
+    fclose(input_file);
+
+    gzclose(output_file);
 }
 
 // TODO move main loops here into drcachesim source file?

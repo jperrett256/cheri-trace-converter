@@ -21,7 +21,7 @@ C_COMPILER_FLAGS := -std=gnu99 -o $(BUILD_DIR)/$(EXE_FILE)
 COMPILER_FLAGS_DEBUG := $(COMPILER_FLAGS_COMMON) -g
 COMPILER_FLAGS_RELEASE := $(COMPILER_FLAGS_COMMON) -O3
 
-LINKER_FLAGS = -lz -lstdc++ # TODO remove C++?
+LINKER_FLAGS = -lz -llz4 -lstdc++ # TODO remove C++?
 
 # all: debug
 all: release

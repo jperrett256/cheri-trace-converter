@@ -26,10 +26,10 @@ void print_commands_and_quit(char * exe_name, command_t * commands, u32 num_comm
     quit();
 }
 
-static void handler_missing(COMMAND_HANDLER_ARGS)
-{
-    assert(!"Handler not implemented!");
-}
+// static void handler_missing(COMMAND_HANDLER_ARGS)
+// {
+//     assert(!"Handler not implemented!");
+// }
 
 int main(int argc, char * argv[])
 {
@@ -49,7 +49,7 @@ int main(int argc, char * argv[])
         },
         {
             string_lit("convert"), /* TODO eventually call "convert" and just use file extension */
-            handler_missing // TODO
+            trace_convert
         },
         {
             string_lit("convert-drcachesim-vaddr"),
