@@ -2,7 +2,7 @@
 #define SIMULATOR_INCLUDE
 
 #include "jdp.h"
-#include <zlib.h>
+#include "io.h"
 
 #define CACHE_LINE_SIZE 64
 #define CACHE_LINE_SIZE_BITS 6
@@ -86,7 +86,7 @@ struct tag_cache_t
 typedef struct controller_interface_t controller_interface_t;
 struct controller_interface_t
 {
-	gzFile output;
+	trace_writer_t output;
     u32 tags_size;
     u8 * tags; // NOTE tag controller's view of memory
     controller_interface_stats_t stats;

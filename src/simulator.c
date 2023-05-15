@@ -66,8 +66,7 @@ device_t * controller_interface_init(arena_t * arena, char * initial_tags_filena
         if (!confirm_overwrite_file(output_filename)) quit();
     }
 
-    device->controller_interface.output = gzopen(output_filename, "wb");
-    assert(device->controller_interface.output);
+    device->controller_interface.output = trace_writer_open(arena, output_filename, guess_writer_type(output_filename));
 
     return device;
 }
@@ -83,17 +82,14 @@ static void controller_interface_write_entry(device_t * device, u8 type, u64 pad
     static_assert(CACHE_LINE_SIZE <= UINT16_MAX, "Invalid cache line size.");
     request.size = CACHE_LINE_SIZE;
 
-    assert(device->controller_interface.output);
-    int bytes_written = gzwrite(device->controller_interface.output, &request, sizeof(request));
-    assert(bytes_written == sizeof(request));
+    trace_writer_emit(&device->controller_interface.output, &request, sizeof(request));
 }
 
 static void controller_interface_cleanup(device_t * device)
 {
     assert(device->type == DEVICE_TYPE_CONTROLLER_INTERFACE);
 
-    assert(device->controller_interface.output);
-    gzclose(device->controller_interface.output);
+    trace_writer_close(&device->controller_interface.output);
 }
 
 static inline void tag_table_get_index(u32 tag_table_size, u64 paddr,

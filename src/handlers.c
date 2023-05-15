@@ -179,7 +179,7 @@ void trace_get_info(COMMAND_HANDLER_ARGS)
 
     char * input_filename = args[0];
 
-    trace_reader input_trace =
+    trace_reader_t input_trace =
         trace_reader_open(arena, input_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
 
     trace_stats_t global_stats = {0};
@@ -215,11 +215,11 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
         quit();
     }
 
-    trace_reader input_trace =
-        trace_reader_open(arena, input_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
+    trace_reader_t input_trace =
+        trace_reader_open(arena, input_filename, guess_reader_type(input_filename));
 
-    trace_writer output_trace =
-        trace_writer_open(arena, output_filename, TRACE_WRITER_TYPE_GZIP);
+    trace_writer_t output_trace =
+        trace_writer_open(arena, output_filename, guess_writer_type(output_filename));
 
     map_u64 page_table = map_u64_create();
     set_u64 dbg_pages_changed_mapping = set_u64_create();
@@ -305,7 +305,7 @@ void trace_convert(COMMAND_HANDLER_ARGS)
 {
     if (num_args != 2)
     {
-        printf("Usage: %s %s <input lz4 file> <output gz file>\n", exe_name, cmd_name); // TODO
+        printf("Usage: %s %s <input file> <output file>\n", exe_name, cmd_name);
         quit();
     }
 
@@ -317,9 +317,9 @@ void trace_convert(COMMAND_HANDLER_ARGS)
         if (!confirm_overwrite_file(output_filename)) quit();
     }
 
-    trace_reader input_trace =
+    trace_reader_t input_trace =
         trace_reader_open(arena, input_filename, guess_reader_type(input_filename));
-    trace_writer output_trace =
+    trace_writer_t output_trace =
         trace_writer_open(arena, output_filename, guess_writer_type(output_filename));
 
     trace_stats_t global_stats = {0};
@@ -335,6 +335,39 @@ void trace_convert(COMMAND_HANDLER_ARGS)
     }
 
     print_trace_stats(&global_stats);
+
+    trace_reader_close(&input_trace);
+    trace_writer_close(&output_trace);
+}
+
+void trace_convert_generic(COMMAND_HANDLER_ARGS)
+{
+    if (num_args != 2)
+    {
+        printf("Usage: %s %s <input file> <output file>\n", exe_name, cmd_name);
+        quit();
+    }
+
+    char * input_filename = args[0];
+    char * output_filename = args[1];
+
+    if (file_exists(output_filename))
+    {
+        if (!confirm_overwrite_file(output_filename)) quit();
+    }
+
+    trace_reader_t input_trace =
+        trace_reader_open(arena, input_filename, guess_reader_type(input_filename));
+    trace_writer_t output_trace =
+        trace_writer_open(arena, output_filename, guess_writer_type(output_filename));
+
+    while (true)
+    {
+        u8 current_byte;
+        if (!trace_reader_get(&input_trace, &current_byte, 1)) break;
+
+        trace_writer_emit(&output_trace, &current_byte, 1);
+    }
 
     trace_reader_close(&input_trace);
     trace_writer_close(&output_trace);
@@ -357,10 +390,10 @@ void trace_convert_drcachesim_vaddr(COMMAND_HANDLER_ARGS)
         if (!confirm_overwrite_file(output_trace_filename)) quit();
     }
 
-    trace_reader input_trace =
+    trace_reader_t input_trace =
         trace_reader_open(arena, input_trace_filename, guess_reader_type(input_trace_filename));
 
-    trace_writer output_trace =
+    trace_writer_t output_trace =
         trace_writer_open(arena, output_trace_filename, guess_writer_type(output_trace_filename));
 
     write_drcachesim_header(&output_trace);
@@ -399,11 +432,11 @@ void trace_convert_drcachesim_paddr(COMMAND_HANDLER_ARGS)
         if (!confirm_overwrite_file(output_trace_filename)) quit();
     }
 
-    trace_reader input_trace =
-        trace_reader_open(arena, input_trace_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
+    trace_reader_t input_trace =
+        trace_reader_open(arena, input_trace_filename, guess_reader_type(input_trace_filename));
 
-    trace_writer output_trace =
-        trace_writer_open(arena, output_trace_filename, TRACE_WRITER_TYPE_LZ4);
+    trace_writer_t output_trace =
+        trace_writer_open(arena, output_trace_filename, guess_writer_type(output_trace_filename));
 
     write_drcachesim_header(&output_trace);
 
@@ -439,8 +472,8 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
         quit();
     }
 
-    trace_reader input_trace =
-        trace_reader_open(arena, input_trace_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
+    trace_reader_t input_trace =
+        trace_reader_open(arena, input_trace_filename, guess_reader_type(input_trace_filename));
 
     FILE * initial_tags_file = fopen(initial_tags_filename, "wb");
     assert(initial_tags_file);
@@ -661,8 +694,8 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
     }
     printf("\n");
 
-    trace_reader input_trace =
-        trace_reader_open(arena, input_trace_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
+    trace_reader_t input_trace =
+        trace_reader_open(arena, input_trace_filename, guess_reader_type(input_trace_filename));
 
     i64 dbg_paddrs_missing = 0;
     i64 dbg_paddrs_invalid = 0;
@@ -847,7 +880,7 @@ void trace_simulate_uncompressed(COMMAND_HANDLER_ARGS)
 
     device_t * tag_controller = tag_cache_init(arena, initial_tags_filename, KILOBYTES(32), 4);
 
-    trace_reader input_trace =
+    trace_reader_t input_trace =
         trace_reader_open(arena, input_trace_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
 
     printf("Simulating with following configuration:\n");

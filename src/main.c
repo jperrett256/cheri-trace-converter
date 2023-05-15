@@ -48,8 +48,12 @@ int main(int argc, char * argv[])
             // TODO if you wanna implement your own hashmap, checking the output of this with previous results would be a good way to test it
         },
         {
-            string_lit("convert"), /* TODO eventually call "convert" and just use file extension */
+            string_lit("convert"),
             trace_convert
+        },
+        {
+            string_lit("convert-generic"),
+            trace_convert_generic
         },
         {
             string_lit("convert-drcachesim-vaddr"),

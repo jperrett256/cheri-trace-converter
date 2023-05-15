@@ -32,7 +32,7 @@ static void memmove_down(void * dst, const void * src, i64 size)
 //     }
 // }
 
-static void lz4_reader_open(arena_t * arena, char * filename, lz4_reader * state)
+static void lz4_reader_open(arena_t * arena, char * filename, lz4_reader_t * state)
 {
     // TODO create own arena instead?
 
@@ -67,7 +67,7 @@ static void lz4_reader_open(arena_t * arena, char * filename, lz4_reader * state
     // }
 }
 
-static void lz4_reader_close(lz4_reader * state)
+static void lz4_reader_close(lz4_reader_t * state)
 {
     assert(state->ctx);
     assert(state->file);
@@ -80,7 +80,7 @@ static void lz4_reader_close(lz4_reader * state)
     state->file = NULL;
 }
 
-static bool lz4_reader_get_entry(lz4_reader * state, const void * entry, size_t entry_size)
+static bool lz4_reader_get_entry(lz4_reader_t * state, const void * entry, size_t entry_size)
 {
     while (state->dst_remaining < entry_size)
     {
@@ -175,7 +175,7 @@ static void check_readers_closed(void)
     }
 }
 
-trace_reader trace_reader_open(arena_t * arena, char * filename, u8 type)
+trace_reader_t trace_reader_open(arena_t * arena, char * filename, u8 type)
 {
     assert(num_readers_open < INT32_MAX);
     num_readers_open++;
@@ -186,7 +186,7 @@ trace_reader trace_reader_open(arena_t * arena, char * filename, u8 type)
         atexit(check_readers_closed);
     }
 
-    trace_reader reader = {0};
+    trace_reader_t reader = {0};
     reader.type = type;
 
     switch (type)
@@ -207,7 +207,7 @@ trace_reader trace_reader_open(arena_t * arena, char * filename, u8 type)
     return reader;
 }
 
-bool trace_reader_get(trace_reader * reader, void * entry, size_t entry_size)
+bool trace_reader_get(trace_reader_t * reader, void * entry, size_t entry_size)
 {
     switch (reader->type)
     {
@@ -232,7 +232,7 @@ bool trace_reader_get(trace_reader * reader, void * entry, size_t entry_size)
     return false;
 }
 
-void trace_reader_close(trace_reader * reader)
+void trace_reader_close(trace_reader_t * reader)
 {
     switch (reader->type)
     {
@@ -254,7 +254,7 @@ void trace_reader_close(trace_reader * reader)
 }
 
 
-void lz4_writer_open(arena_t * arena, char * filename, lz4_writer * state)
+void lz4_writer_open(arena_t * arena, char * filename, lz4_writer_t * state)
 {
     state->file = fopen(filename, "wb");
     assert(state->file);
@@ -294,7 +294,7 @@ void lz4_writer_open(arena_t * arena, char * filename, lz4_writer * state)
     assert(bytes_written == header_size);
 }
 
-static void lz4_writer_compress(lz4_writer * state)
+static void lz4_writer_compress(lz4_writer_t * state)
 {
     assert(state->src_size > 0);
 
@@ -308,7 +308,7 @@ static void lz4_writer_compress(lz4_writer * state)
     state->src_size = 0;
 }
 
-void lz4_writer_emit_entry(lz4_writer * state, const void * entry, size_t entry_size)
+void lz4_writer_emit_entry(lz4_writer_t * state, const void * entry, size_t entry_size)
 {
     assert(state->file);
     assert(entry_size <= LZ4_BUFFER_SIZE);
@@ -328,7 +328,7 @@ void lz4_writer_emit_entry(lz4_writer * state, const void * entry, size_t entry_
 }
 
 // NOTE must be careful to close these lz4 writers in particular
-void lz4_writer_close(lz4_writer * state)
+void lz4_writer_close(lz4_writer_t * state)
 {
     assert(state->file);
 
@@ -366,7 +366,7 @@ static void check_writers_closed(void)
     }
 }
 
-trace_writer trace_writer_open(arena_t * arena, char * filename, u8 type)
+trace_writer_t trace_writer_open(arena_t * arena, char * filename, u8 type)
 {
     assert(num_writers_open < INT32_MAX);
     num_writers_open++;
@@ -377,7 +377,7 @@ trace_writer trace_writer_open(arena_t * arena, char * filename, u8 type)
         atexit(check_writers_closed);
     }
 
-    trace_writer writer = {0};
+    trace_writer_t writer = {0};
     writer.type = type;
 
     switch (type)
@@ -403,7 +403,7 @@ trace_writer trace_writer_open(arena_t * arena, char * filename, u8 type)
     return writer;
 }
 
-void trace_writer_emit(trace_writer * writer, const void * entry, size_t entry_size)
+void trace_writer_emit(trace_writer_t * writer, const void * entry, size_t entry_size)
 {
     switch (writer->type)
     {
@@ -427,7 +427,7 @@ void trace_writer_emit(trace_writer * writer, const void * entry, size_t entry_s
     }
 }
 
-void trace_writer_close(trace_writer * writer)
+void trace_writer_close(trace_writer_t * writer)
 {
     switch (writer->type)
     {

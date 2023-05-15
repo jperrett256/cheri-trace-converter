@@ -12,7 +12,7 @@ EXTERN_C
 #include "common.h"
 #include "drcachesim.h"
 
-void write_drcachesim_header(trace_writer * writer)
+void write_drcachesim_header(trace_writer_t * writer)
 {
     assert(writer);
 
@@ -55,7 +55,7 @@ void write_drcachesim_header(trace_writer * writer)
     trace_writer_emit(writer, &page_size, sizeof(page_size));
 }
 
-void write_drcachesim_footer(trace_writer * writer)
+void write_drcachesim_footer(trace_writer_t * writer)
 {
     assert(writer);
 
@@ -94,7 +94,7 @@ static unsigned short get_drcachesim_type(uint8_t type)
     return -1;
 }
 
-static void write_drcachesim_tag_entry(trace_writer * writer, uint8_t type, uint8_t tag)
+static void write_drcachesim_tag_entry(trace_writer_t * writer, uint8_t type, uint8_t tag)
 {
     if (type == CUSTOM_TRACE_TYPE_INSTR) assert(tag == 0);
     if (type == CUSTOM_TRACE_TYPE_STORE) assert(tag == 0);
@@ -116,7 +116,7 @@ static void write_drcachesim_tag_entry(trace_writer * writer, uint8_t type, uint
     }
 }
 
-static void write_drcachesim_page_mapping_entries(trace_writer * writer, u64 vaddr, u64 paddr)
+static void write_drcachesim_page_mapping_entries(trace_writer_t * writer, u64 vaddr, u64 paddr)
 {
     trace_entry_t paddr_mapping_entry =
     {
@@ -135,7 +135,7 @@ static void write_drcachesim_page_mapping_entries(trace_writer * writer, u64 vad
     trace_writer_emit(writer, &vaddr_mapping_entry, sizeof(vaddr_mapping_entry));
 }
 
-void write_drcachesim_trace_entry_vaddr(trace_writer * writer, map_u64 page_table, custom_trace_entry_t custom_entry)
+void write_drcachesim_trace_entry_vaddr(trace_writer_t * writer, map_u64 page_table, custom_trace_entry_t custom_entry)
 {
     assert(writer);
 
@@ -187,7 +187,7 @@ void write_drcachesim_trace_entry_vaddr(trace_writer * writer, map_u64 page_tabl
     trace_writer_emit(writer, &drcachesim_entry, sizeof(drcachesim_entry));
 }
 
-void write_drcachesim_trace_entry_paddr(trace_writer * writer, custom_trace_entry_t custom_entry)
+void write_drcachesim_trace_entry_paddr(trace_writer_t * writer, custom_trace_entry_t custom_entry)
 {
     write_drcachesim_tag_entry(writer, custom_entry.type, custom_entry.tag);
 
