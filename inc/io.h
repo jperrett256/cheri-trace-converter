@@ -78,4 +78,7 @@ trace_writer trace_writer_open(arena_t * arena, char * filename, u8 type);
 void trace_writer_emit(trace_writer * writer, const void * entry, size_t entry_size);
 void trace_writer_close(trace_writer * writer);
 
+u8 guess_reader_type(char * filename);
+u8 guess_writer_type(char * filename);
+
 #endif /* IO_INCLUDE */

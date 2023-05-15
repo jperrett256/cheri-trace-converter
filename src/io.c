@@ -1,6 +1,8 @@
 #include "io.h"
 #include "utils.h"
 
+#include <stdlib.h>
+
 #define LZ4_BUFFER_SIZE MEGABYTES(1)
 static_assert(LZ4_BUFFER_SIZE >= LZ4F_HEADER_SIZE_MAX, "Inappropriate LZ4 buffer size.");
 
@@ -137,29 +139,6 @@ static bool lz4_reader_get_entry(lz4_reader * state, const void * entry, size_t 
 }
 
 
-trace_reader trace_reader_open(arena_t * arena, char * filename, u8 type)
-{
-    trace_reader reader = {0};
-    reader.type = type;
-
-    switch (type)
-    {
-        case TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP:
-        {
-            reader.as.gzip = gzopen(filename, "rb");
-            assert(reader.as.gzip);
-            // TODO tune buffer size with gzbuffer? manual buffering?
-        } break;
-        case TRACE_READER_TYPE_LZ4:
-        {
-            lz4_reader_open(arena, filename, &reader.as.lz4);
-        } break;
-        default: assert(!"Impossible");
-    }
-
-    return reader;
-}
-
 static bool gz_at_eof(int bytes_read, int expected_bytes)
 {
     if (bytes_read < 0)
@@ -180,6 +159,52 @@ static bool gz_at_eof(int bytes_read, int expected_bytes)
     }
 
     return false;
+}
+
+
+static i32 num_readers_open = 0;
+static bool will_check_readers_closed = false;
+static void check_readers_closed(void)
+{
+    if (num_readers_open != 0)
+    {
+        printf("ERROR: found %d readers still open.\n", num_readers_open);
+        fflush(stdout);
+        assert(false);
+        quit();
+    }
+}
+
+trace_reader trace_reader_open(arena_t * arena, char * filename, u8 type)
+{
+    assert(num_readers_open < INT32_MAX);
+    num_readers_open++;
+
+    if (!will_check_readers_closed)
+    {
+        will_check_readers_closed = true;
+        atexit(check_readers_closed);
+    }
+
+    trace_reader reader = {0};
+    reader.type = type;
+
+    switch (type)
+    {
+        case TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP:
+        {
+            reader.as.gzip = gzopen(filename, "rb");
+            assert(reader.as.gzip);
+            // TODO tune buffer size with gzbuffer? manual buffering?
+        } break;
+        case TRACE_READER_TYPE_LZ4:
+        {
+            lz4_reader_open(arena, filename, &reader.as.lz4);
+        } break;
+        default: assert(!"Impossible");
+    }
+
+    return reader;
 }
 
 bool trace_reader_get(trace_reader * reader, void * entry, size_t entry_size)
@@ -223,6 +248,9 @@ void trace_reader_close(trace_reader * reader)
         } break;
         default: assert(!"Impossible");
     }
+
+    assert(num_readers_open > 0);
+    num_readers_open--;
 }
 
 
@@ -299,6 +327,7 @@ void lz4_writer_emit_entry(lz4_writer * state, const void * entry, size_t entry_
     state->src_size += entry_size;
 }
 
+// NOTE must be careful to close these lz4 writers in particular
 void lz4_writer_close(lz4_writer * state)
 {
     assert(state->file);
@@ -323,8 +352,31 @@ void lz4_writer_close(lz4_writer * state)
     state->file = NULL;
 }
 
+
+static i32 num_writers_open = 0;
+static bool will_check_writers_closed = false;
+static void check_writers_closed(void)
+{
+    if (num_writers_open != 0)
+    {
+        printf("ERROR: found %d writers still open.\n", num_writers_open);
+        fflush(stdout);
+        assert(false);
+        quit();
+    }
+}
+
 trace_writer trace_writer_open(arena_t * arena, char * filename, u8 type)
 {
+    assert(num_writers_open < INT32_MAX);
+    num_writers_open++;
+
+    if (!will_check_writers_closed)
+    {
+        will_check_writers_closed = true;
+        atexit(check_writers_closed);
+    }
+
     trace_writer writer = {0};
     writer.type = type;
 
@@ -397,4 +449,66 @@ void trace_writer_close(trace_writer * writer)
         } break;
         default: assert(!"Impossible");
     }
+
+    assert(num_writers_open > 0);
+    num_writers_open--;
 }
+
+
+static string_t get_file_extension(char * path)
+{
+    string_t path_str = string_from_cstr(path);
+
+    for (i64 i = path_str.size - 1; i >= 0; i--)
+    {
+        if (path_str.ptr[i] == '.')
+        {
+            i64 start_idx = i + 1;
+            return (string_t) { &path_str.ptr[start_idx], path_str.size - start_idx };
+        }
+
+        if (path_str.ptr[i] == '/' || path_str.ptr[i] == '\\') break;
+    }
+
+    return (string_t) { NULL, 0 };
+}
+
+u8 guess_reader_type(char * filename)
+{
+    string_t extension = get_file_extension(filename);
+
+    if (string_match(extension, string_lit("gz")))
+    {
+        return TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP;
+    }
+
+    if (string_match(extension, string_lit("lz4")))
+    {
+        return TRACE_READER_TYPE_LZ4;
+    }
+
+    fprintf(stderr,
+        "WARNING: Unrecognised extension on \"%s\", assuming uncompressed or gzip compressed (for reading).\n", filename);
+    return TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP;
+}
+
+u8 guess_writer_type(char * filename)
+{
+    string_t extension = get_file_extension(filename);
+
+    if (string_match(extension, string_lit("gz")))
+    {
+        return TRACE_WRITER_TYPE_GZIP;
+    }
+
+    if (string_match(extension, string_lit("lz4")))
+    {
+        return TRACE_WRITER_TYPE_LZ4;
+    }
+
+    fprintf(stderr,
+        "WARNING: Unrecognised extension on \"%s\", assuming uncompressed (for writing).\n", filename);
+    return TRACE_WRITER_TYPE_UNCOMPRESSED;
+}
+
+

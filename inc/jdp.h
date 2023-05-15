@@ -73,12 +73,12 @@ char * get_temp_buffer();
 typedef struct string_t string_t;
 struct string_t
 {
-    char * start;
+    char * ptr;
     i64 size;
 };
 
-#define string_lit(x) 	(string_t) { .start = (char *) (x), .size = sizeof(x) - 1 }
-#define string_varg(s) 	(int)(s).size, (s).start
+#define string_lit(x) 	(string_t) { .ptr = (char *) (x), .size = sizeof(x) - 1 }
+#define string_varg(s) 	(int)(s).size, (s).ptr
 
 string_t string_from_cstr(char * cstr);
 string_t string_slice(string_t s, i64 start, i64 end);
@@ -128,7 +128,7 @@ string_t string_slice(string_t s, i64 start, i64 end)
     assert(end >= start);
     assert(s.size >= start);
     assert(s.size >= end);
-    return (string_t) { s.start + start, end - start };
+    return (string_t) { s.ptr + start, end - start };
 }
 
 string_t string_prefix(string_t s, i64 end)
@@ -141,6 +141,11 @@ string_t string_suffix(string_t s, i64 start)
     return string_slice(s, start, s.size);
 }
 
+bool string_empty(string_t str)
+{
+    return str.ptr == NULL || str.size <= 0;
+}
+
 bool string_match(string_t a, string_t b)
 {
     if (a.size != b.size) return false;
@@ -148,7 +153,7 @@ bool string_match(string_t a, string_t b)
     bool match = true;
     for (i64 i = 0; i < a.size; i++)
     {
-        if (a.start[i] != b.start[i])
+        if (a.ptr[i] != b.ptr[i])
         {
             match = false;
             break;

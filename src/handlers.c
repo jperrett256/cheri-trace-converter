@@ -317,17 +317,10 @@ void trace_convert(COMMAND_HANDLER_ARGS)
         if (!confirm_overwrite_file(output_filename)) quit();
     }
 
-    // TODO functions for getting type based on file extension?
-
-    // trace_reader input_trace =
-    //     trace_reader_open(arena, input_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
-    trace_writer output_trace =
-        trace_writer_open(arena, output_filename, TRACE_WRITER_TYPE_LZ4);
-
     trace_reader input_trace =
-        trace_reader_open(arena, input_filename, TRACE_READER_TYPE_LZ4);
-    // trace_writer output_trace =
-    //     trace_writer_open(arena, output_filename, TRACE_WRITER_TYPE_GZIP);
+        trace_reader_open(arena, input_filename, guess_reader_type(input_filename));
+    trace_writer output_trace =
+        trace_writer_open(arena, output_filename, guess_writer_type(output_filename));
 
     trace_stats_t global_stats = {0};
 
@@ -343,7 +336,6 @@ void trace_convert(COMMAND_HANDLER_ARGS)
 
     print_trace_stats(&global_stats);
 
-    // NOTE must be careful to close those lz4 writers in particular
     trace_reader_close(&input_trace);
     trace_writer_close(&output_trace);
 }
@@ -366,10 +358,10 @@ void trace_convert_drcachesim_vaddr(COMMAND_HANDLER_ARGS)
     }
 
     trace_reader input_trace =
-        trace_reader_open(arena, input_trace_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
+        trace_reader_open(arena, input_trace_filename, guess_reader_type(input_trace_filename));
 
     trace_writer output_trace =
-        trace_writer_open(arena, output_trace_filename, TRACE_WRITER_TYPE_GZIP);
+        trace_writer_open(arena, output_trace_filename, guess_writer_type(output_trace_filename));
 
     write_drcachesim_header(&output_trace);
 
@@ -411,7 +403,7 @@ void trace_convert_drcachesim_paddr(COMMAND_HANDLER_ARGS)
         trace_reader_open(arena, input_trace_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
 
     trace_writer output_trace =
-        trace_writer_open(arena, output_trace_filename, TRACE_WRITER_TYPE_GZIP);
+        trace_writer_open(arena, output_trace_filename, TRACE_WRITER_TYPE_LZ4);
 
     write_drcachesim_header(&output_trace);
 
