@@ -396,19 +396,29 @@ void trace_convert_drcachesim_vaddr(COMMAND_HANDLER_ARGS)
     trace_writer_t output_trace =
         trace_writer_open(arena, output_trace_filename, guess_writer_type(output_trace_filename));
 
-    write_drcachesim_header(&output_trace);
-
+    u64 dbg_paddrs_invalid = 0;
     map_u64 page_table = map_u64_create();
+
+    write_drcachesim_header(&output_trace);
 
     while (true)
     {
         custom_trace_entry_t current_entry;
         if (!trace_reader_get(&input_trace, &current_entry, sizeof(current_entry))) break;
 
+        // skip invalid entries
+        if (!check_paddr_valid(current_entry.paddr))
+        {
+            dbg_paddrs_invalid++;
+            continue;
+        }
+
         write_drcachesim_trace_entry_vaddr(&output_trace, page_table, current_entry);
     }
 
     write_drcachesim_footer(&output_trace);
+
+    printf("Entries with invalid paddrs (skipped): %ld\n", dbg_paddrs_invalid);
 
     map_u64_cleanup(&page_table);
 
@@ -438,6 +448,8 @@ void trace_convert_drcachesim_paddr(COMMAND_HANDLER_ARGS)
     trace_writer_t output_trace =
         trace_writer_open(arena, output_trace_filename, guess_writer_type(output_trace_filename));
 
+    u64 dbg_paddrs_invalid = 0;
+
     write_drcachesim_header(&output_trace);
 
     while (true)
@@ -445,10 +457,19 @@ void trace_convert_drcachesim_paddr(COMMAND_HANDLER_ARGS)
         custom_trace_entry_t current_entry;
         if (!trace_reader_get(&input_trace, &current_entry, sizeof(current_entry))) break;
 
+        // skip invalid entries
+        if (!check_paddr_valid(current_entry.paddr))
+        {
+            dbg_paddrs_invalid++;
+            continue;
+        }
+
         write_drcachesim_trace_entry_paddr(&output_trace, current_entry);
     }
 
     write_drcachesim_footer(&output_trace);
+
+    printf("Entries with invalid paddrs (skipped): %ld\n", dbg_paddrs_invalid);
 
     trace_reader_close(&input_trace);
     trace_writer_close(&output_trace);
@@ -719,14 +740,14 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
         }
 
         u64 start_addr = align_floor_pow_2(current_entry.paddr, CACHE_LINE_SIZE);
-        u64 end_addr = align_ceil_pow_2(current_entry.paddr, CACHE_LINE_SIZE);
+        u64 end_addr = align_ceil_pow_2(current_entry.paddr + current_entry.size, CACHE_LINE_SIZE);
         for (u64 paddr = start_addr; paddr < end_addr; paddr += CACHE_LINE_SIZE)
         {
             u64 start_addr_cap = align_floor_pow_2(current_entry.paddr, CAP_SIZE_BYTES);
-            u64 end_addr_cap = align_ceil_pow_2(current_entry.paddr, CAP_SIZE_BYTES);
+            u64 end_addr_cap = align_ceil_pow_2(current_entry.paddr + current_entry.size, CAP_SIZE_BYTES);
 
             if (start_addr_cap < paddr) start_addr_cap = paddr;
-            if (end_addr_cap > paddr) end_addr_cap = paddr;
+            if (end_addr_cap > paddr + CACHE_LINE_SIZE) end_addr_cap = paddr + CACHE_LINE_SIZE;
 
             assert(start_addr_cap % CAP_SIZE_BYTES == 0);
             assert(end_addr_cap % CAP_SIZE_BYTES == 0);

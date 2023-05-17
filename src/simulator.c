@@ -8,7 +8,8 @@
 
 // TODO do actual tag cache simulation
 // TODO alternatively, could output requests to tag cache, and run the tag cache simulation in a separate pass (might massively save time)
-// TODO should definitely try lz4
+
+static void cache_write_back(device_t * device, u64 paddr, b8 tags_cheri);
 
 static void get_initial_tags(char * initial_tags_filename, u32 tags_buffer_size, u8 * tags_buffer)
 {
@@ -20,7 +21,7 @@ static void get_initial_tags(char * initial_tags_filename, u32 tags_buffer_size,
     fclose(initial_tags_file);
 }
 
-device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename, u32 size, u32 num_ways)
+device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename, u32 size_bytes, u32 num_ways)
 {
     device_t * device = arena_push(arena, sizeof(device_t));
     *device = (device_t) {0};
@@ -29,6 +30,9 @@ device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename, u32 siz
     device->tag_cache.tags_size = MEMORY_SIZE / CAP_SIZE_BYTES / 8;
     device->tag_cache.tags = arena_push_array(arena, u8, device->tag_cache.tags_size);
     get_initial_tags(initial_tags_filename, device->tag_cache.tags_size, device->tag_cache.tags);
+
+    assert(size_bytes % CACHE_LINE_SIZE == 0);
+    u32 size = size_bytes / CACHE_LINE_SIZE;
 
     device->tag_cache.size = size;
     device->tag_cache.num_ways = num_ways;
@@ -239,9 +243,7 @@ void device_write(device_t * device, u64 paddr, b8 tags_cheri)
     {
         case DEVICE_TYPE_CACHE:
         {
-            cache_line_t * cache_line = cache_request(device, paddr);
-            cache_line->tags_cheri = tags_cheri;
-            cache_line->dirty = true;
+            cache_write_back(device, paddr, tags_cheri);
         } break;
         case DEVICE_TYPE_TAG_CACHE:
         {
@@ -294,7 +296,7 @@ b8 device_read(device_t * device, u64 paddr)
 }
 
 
-device_t * cache_init(arena_t * arena, char * name, u32 size, u32 num_ways, device_t * parent)
+device_t * cache_init(arena_t * arena, char * name, u32 size_bytes, u32 num_ways, device_t * parent)
 {
     // TODO
     device_t * device = arena_push(arena, sizeof(device_t));
@@ -305,6 +307,9 @@ device_t * cache_init(arena_t * arena, char * name, u32 size, u32 num_ways, devi
     device->parent = parent;
     assert(parent->num_children < DEVICE_MAX_CHILDREN);
     parent->children[parent->num_children++] = device;
+
+    assert(size_bytes % CACHE_LINE_SIZE == 0);
+    u32 size = size_bytes / CACHE_LINE_SIZE;
 
     device->cache.size = size;
     device->cache.num_ways = num_ways;
@@ -349,6 +354,31 @@ static inline i64 cache_find_existing(device_t * device, u64 tag_addr, u32 * set
     }
 
     return way;
+}
+
+// TODO optional logging?
+
+static void cache_write_back(device_t * device, u64 paddr, b8 tags_cheri)
+{
+    assert(device->type == DEVICE_TYPE_CACHE);
+    assert(paddr % CACHE_LINE_SIZE == 0);
+
+    u64 tag_addr = paddr >> CACHE_LINE_SIZE_BITS;
+    u32 set_start_idx;
+    i64 way = cache_find_existing(device, tag_addr, &set_start_idx);
+
+    // since these caches are inclusive, we can assume that the cache line to overwrite already exists
+    // (and no need to evict + write back to make space)
+    assert(way >= 0);
+
+    cache_line_t * result = &device->cache.entries[set_start_idx + way];
+    assert(result->tag_addr != INVALID_TAG);
+    assert(result->tag_addr == tag_addr);
+
+    result->tags_cheri = tags_cheri;
+    result->dirty = true;
+
+    // NOTE assuming write backs do not affect replacement policy counters
 }
 
 cache_line_t * cache_request(device_t * device, u64 paddr)
@@ -414,41 +444,53 @@ cache_line_t * cache_request(device_t * device, u64 paddr)
 
         if (line_to_replace->tag_addr != INVALID_TAG)
         {
+            /* NOTE we perform back invalidations before evicting the cache line in case the children
+             * have an updated copy of the data. This way, they write it back before the eviction. */
+
+            // back invalidations
+            u32 num_children_dirty = 0;
+            for (i64 i = 0; i < device->num_children; i++)
+            {
+                device_t * child = device->children[i];
+                assert(child->type == DEVICE_TYPE_CACHE);
+                u32 child_set_start_idx;
+                i64 child_way = cache_find_existing(child, line_to_replace->tag_addr, &child_set_start_idx);
+                if (child_way >= 0)
+                {
+                    cache_line_t * child_cache_line = &child->cache.entries[child_set_start_idx + child_way];
+                    if (child_cache_line->dirty)
+                    {
+                        num_children_dirty++;
+
+                        assert(child->parent == device);
+                        assert(child_cache_line->tag_addr != INVALID_TAG);
+                        assert(child_cache_line->tag_addr == line_to_replace->tag_addr);
+
+                        // write back from child to this cache
+                        child->cache.stats.write_backs++;
+                        cache_write_back(device, child_cache_line->tag_addr << CACHE_LINE_SIZE_BITS, child_cache_line->tags_cheri);
+                    }
+
+                    child->cache.stats.invalidations++;
+                    child_cache_line->tag_addr = INVALID_TAG;
+                }
+            }
+            assert(num_children_dirty <= 1); // otherwise we have a coherence violation
+
             // evict if necessary
             if (line_to_replace->dirty)
             {
                 // printf(INDENT8 "Writing-back cache line into parent device.\n");
 
-                /* TODO handle tag cache as well when we have that
-                 * could just switch to having an expect_hit flag for device_write/cache_lookup
-                 * (cache_lookup can avoid having flag, if the initial check for a hit is moved into another function?)
-                 */
-                // TODO can use cache_find_existing instead
-                u64 parent_prev_hits = UINT64_MAX;
-                u64 parent_prev_misses = UINT64_MAX;
-                if (device->parent->type == DEVICE_TYPE_CACHE)
-                {
-                    parent_prev_hits = device->parent->cache.stats.hits;
-                    parent_prev_misses = device->parent->cache.stats.misses;
-                }
-
                 assert(line_to_replace->tag_addr != INVALID_TAG);
+
+                device->cache.stats.write_backs++;
                 device_write(device->parent, line_to_replace->tag_addr << CACHE_LINE_SIZE_BITS, line_to_replace->tags_cheri);
-
-                if (device->parent->type == DEVICE_TYPE_CACHE)
-                {
-                    assert(parent_prev_hits != UINT64_MAX && parent_prev_misses != UINT64_MAX);
-
-                    // expect hit in next level cache already when writing-back
-                    assert(device->parent->cache.stats.misses == parent_prev_misses);
-                    assert(device->parent->cache.stats.hits == parent_prev_hits + 1);
-                }
-                else assert(device->parent->type == DEVICE_TYPE_CONTROLLER_INTERFACE);
             }
             else
             {
                 // TODO handle tag cache as well when we have that
-                // TODO could create a utility function with a switch statement inside?
+                // TODO could create a utility function with a switch statement inside? device_check_for() or sth
                 if (device->parent->type == DEVICE_TYPE_CACHE)
                 {
                     // check tags match what we have in the next cache
@@ -467,20 +509,6 @@ cache_line_t * cache_request(device_t * device, u64 paddr)
                     assert(tags_cheri == line_to_replace->tags_cheri);
                 }
                 else assert(0);
-            }
-
-            // back invalidations
-            for (i64 i = 0; i < device->num_children; i++)
-            {
-                device_t * child = device->children[i];
-                assert(child->type == DEVICE_TYPE_CACHE);
-                u32 child_set_start_idx;
-                i64 child_way = cache_find_existing(child, line_to_replace->tag_addr, &child_set_start_idx);
-                if (child_way >= 0)
-                {
-                    child->cache.stats.invalidations++;
-                    child->cache.entries[child_set_start_idx + child_way].tag_addr = INVALID_TAG;
-                }
             }
         }
 
@@ -575,13 +603,13 @@ void device_print_configuration(device_t * device)
         case DEVICE_TYPE_CACHE:
         {
             printf(INDENT4 "%s (%u-way, %u bytes) -> %s\n",
-                device_get_name(device), device->cache.num_ways, device->cache.size,
+                device_get_name(device), device->cache.num_ways, device->cache.size * CACHE_LINE_SIZE,
                 device->parent ? device_get_name(device->parent) : "NULL");
         } break;
         case DEVICE_TYPE_TAG_CACHE:
         {
             printf(INDENT4 "%s (%u-way, %u bytes)\n",
-                device_get_name(device), device->tag_cache.num_ways, device->tag_cache.size);
+                device_get_name(device), device->tag_cache.num_ways, device->tag_cache.size * CACHE_LINE_SIZE);
         } break;
         case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
@@ -602,9 +630,11 @@ void device_print_statistics(device_t * device)
             printf(INDENT8 "Hits: %lu\n", device->cache.stats.hits);
             printf(INDENT8 "Misses: %lu\n", device->cache.stats.misses);
             printf(INDENT8 "Invalidations: %lu\n", device->cache.stats.invalidations);
+            printf(INDENT8 "Write backs: %lu\n", device->cache.stats.write_backs);
 
-            printf(INDENT8 "Miss rate: %f\n",
-                (double) device->cache.stats.misses / (device->cache.stats.hits + device->cache.stats.misses));
+            double miss_rate =
+                (double) device->cache.stats.misses / (device->cache.stats.hits + device->cache.stats.misses);
+            printf(INDENT8 "Miss rate: %.2f%%\n", miss_rate * 100);
         } break;
         case DEVICE_TYPE_TAG_CACHE:
         {
@@ -612,8 +642,9 @@ void device_print_statistics(device_t * device)
             printf(INDENT8 "Misses: %lu\n", device->tag_cache.stats.misses);
             printf(INDENT8 "Write backs: %lu\n", device->tag_cache.stats.write_backs);
 
-            printf(INDENT8 "Miss rate: %f\n",
-                (double) device->tag_cache.stats.misses / (device->tag_cache.stats.hits + device->tag_cache.stats.misses));
+            double miss_rate =
+                (double) device->tag_cache.stats.misses / (device->tag_cache.stats.hits + device->tag_cache.stats.misses);
+            printf(INDENT8 "Miss rate: %.2f%%\n", miss_rate * 100);
         } break;
         case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {

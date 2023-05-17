@@ -24,6 +24,7 @@ struct cache_stats_t
 {
     u64 hits;
     u64 misses;
+    u64 write_backs;
     u64 invalidations;
     // TODO types of misses?
     // TODO prefetcher?
