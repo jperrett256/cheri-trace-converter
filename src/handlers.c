@@ -677,18 +677,18 @@ static inline u8 get_tag_idx(u64 cache_line_addr, u64 cap_addr)
     return tag_idx;
 }
 
-static inline void tag_set(cache_line_t * cache_line, u8 tag_idx, u8 value)
+static inline void tag_set(tags_t * tags_cheri, u8 tag_idx, u8 value)
 {
     if (value)
     {
-        cache_line->tags_cheri |= (1 << tag_idx);
+        tags_cheri->data |= (1 << tag_idx);
     }
     else
     {
-        cache_line->tags_cheri &= ~(1 << tag_idx);
+        tags_cheri->data &= ~(1 << tag_idx);
     }
 
-    cache_line->tags_known |= (1 << tag_idx);
+    tags_cheri->known |= (1 << tag_idx);
 }
 
 void trace_simulate(COMMAND_HANDLER_ARGS)
@@ -774,9 +774,11 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
                 for (u64 paddr_cap = start_addr_cap; paddr_cap < end_addr_cap; paddr_cap += CAP_SIZE_BYTES)
                 {
                     u8 tag_idx = get_tag_idx(paddr, paddr_cap);
-                    tag_set(cache_line, tag_idx, 0);
-                    assert((cache_line->tags_cheri & (1 << tag_idx)) == 0);
-                    assert((cache_line->tags_known & (1 << tag_idx)) != 0);
+
+                    tag_set(&cache_line->tags_cheri, tag_idx, 0);
+
+                    assert((cache_line->tags_cheri.data & (1 << tag_idx)) == 0);
+                    assert((cache_line->tags_cheri.known & (1 << tag_idx)) != 0);
                 }
             }
             else
@@ -793,12 +795,13 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
                             u8 tag_idx = get_tag_idx(paddr, paddr_cap);
 
                             // if the tag is already "known", then this should match what was there before
-                            assert((cache_line->tags_known & (1 << tag_idx)) == 0 ||
-                                ((cache_line->tags_cheri & (1 << tag_idx)) != 0) == current_entry.tag);
+                            assert((cache_line->tags_cheri.known & (1 << tag_idx)) == 0 ||
+                                ((cache_line->tags_cheri.data & (1 << tag_idx)) != 0) == current_entry.tag);
 
-                            tag_set(cache_line, tag_idx, current_entry.tag);
-                            assert(((cache_line->tags_cheri & (1 << tag_idx)) != 0) == current_entry.tag);
-                            assert((cache_line->tags_known & (1 << tag_idx)) != 0);
+                            tag_set(&cache_line->tags_cheri, tag_idx, current_entry.tag);
+
+                            assert(((cache_line->tags_cheri.data & (1 << tag_idx)) != 0) == current_entry.tag);
+                            assert((cache_line->tags_cheri.known & (1 << tag_idx)) != 0);
                         }
                     } break;
                     case CUSTOM_TRACE_TYPE_STORE:
@@ -813,9 +816,10 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
                         {
                             u8 tag_idx = get_tag_idx(paddr, paddr_cap);
 
-                            tag_set(cache_line, tag_idx, current_entry.tag);
-                            assert(((cache_line->tags_cheri & (1 << tag_idx)) != 0) == current_entry.tag);
-                            assert((cache_line->tags_known & (1 << tag_idx)) != 0);
+                            tag_set(&cache_line->tags_cheri, tag_idx, current_entry.tag);
+
+                            assert(((cache_line->tags_cheri.data & (1 << tag_idx)) != 0) == current_entry.tag);
+                            assert((cache_line->tags_cheri.known & (1 << tag_idx)) != 0);
                         }
                     } break;
                     default: assert(!"Impossible.");

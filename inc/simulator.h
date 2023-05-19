@@ -47,20 +47,21 @@ struct controller_interface_stats_t
 	// TODO writes_untagged?
 };
 
+typedef struct tags_t tags_t;
+struct tags_t
+{
+    // TODO make 16 bits to support larger cache line sizes (>128)?
+    b8 data;
+    b8 known;
+};
+
 // for the L1/L2/L3 caches
 typedef struct cache_line_t cache_line_t;
 struct cache_line_t
 {
-    /* TODO fit in 8 bytes?
-     *  - don't need lower bits of tag (corresponding to bits for byte within cache line or set index)
-     *      - if associativity is not power of 2, will probably need to keep the set bits around (or at least most of them)
-     *  - don't need the higher bits of tag either, not using a full 64 bit address space
-     *  - counter can be 4 bits (for up to 16-way associativity), 4 bits for tags, probably need a valid bit
-     */
     u64 tag_addr;
     u16 counter;
-    b8 tags_cheri; // TODO make 16 bits?
-    b8 tags_known; // TODO make 16 bits?
+    tags_t tags_cheri;
     bool dirty;
 };
 
@@ -74,16 +75,22 @@ struct cache_t
     char * name;
 };
 
+typedef struct tag_table_t tag_table_t;
+struct tag_table_t
+{
+    u8 * data;
+    u8 * known;
+    u32 size;
+};
+
 typedef struct tag_cache_t tag_cache_t;
 struct tag_cache_t
 {
     u32 size;
     u32 num_ways;
     cache_line_t * entries; // NOTE won't store tag in them
-    u32 tags_size;
     // NOTE the tag table here reflects the controller's view of memory
-    u8 * tags;
-    u8 * tags_known;
+    tag_table_t tag_table;
     tag_cache_stats_t stats;
 };
 
@@ -91,10 +98,8 @@ typedef struct controller_interface_t controller_interface_t;
 struct controller_interface_t
 {
 	trace_writer_t output;
-    u32 tags_size;
     // NOTE the tag table here reflects the controller's view of memory
-    u8 * tags;
-    u8 * tags_known;
+    tag_table_t tag_table;
     controller_interface_stats_t stats;
 };
 
@@ -128,8 +133,8 @@ device_t * cache_init(arena_t * arena, char * name, u32 size, u32 num_ways, devi
 device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename, u32 size, u32 num_ways);
 device_t * controller_interface_init(arena_t * arena, char * output_filename);
 
-void device_write(device_t * device, u64 paddr, b8 tags_cheri, b8 tags_known);
-void device_read(device_t * device, u64 paddr, b8 * tags_cheri, b8 * tags_known);
+void device_write(device_t * device, u64 paddr, tags_t tags_cheri);
+tags_t device_read(device_t * device, u64 paddr);
 
 void device_print_configuration(device_t * device);
 void device_print_statistics(device_t * device);
