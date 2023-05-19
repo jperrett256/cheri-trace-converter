@@ -26,4 +26,6 @@ static inline u64 get_page_start(u64 addr)
 #define INDENT4 "    "
 #define INDENT8 INDENT4 INDENT4
 
+#define FMT_ADDR "%016" PRIx64
+
 #endif /* COMMON_INCLUDE */

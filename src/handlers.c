@@ -12,8 +12,6 @@
 #include <zlib.h>
 #include <inttypes.h>
 
-#define FMT_ADDR "%016" PRIx64
-
 
 // static char * get_type_string(u8 type)
 // {
@@ -679,19 +677,32 @@ static inline u8 get_tag_idx(u64 cache_line_addr, u64 cap_addr)
     return tag_idx;
 }
 
+static inline void tag_set(cache_line_t * cache_line, u8 tag_idx, u8 value)
+{
+    if (value)
+    {
+        cache_line->tags_cheri |= (1 << tag_idx);
+    }
+    else
+    {
+        cache_line->tags_cheri &= ~(1 << tag_idx);
+    }
+
+    cache_line->tags_known |= (1 << tag_idx);
+}
+
 void trace_simulate(COMMAND_HANDLER_ARGS)
 {
-    if (num_args != 3)
+    if (num_args != 2)
     {
-        printf("Usage: %s %s <trace file> <initial state> <output file>\n", exe_name, cmd_name);
+        printf("Usage: %s %s <trace file> <output file>\n", exe_name, cmd_name);
         quit();
     }
 
     char * input_trace_filename = args[0];
-    char * initial_tags_filename = args[1];
-    char * output_requests_filename = args[2];
+    char * output_requests_filename = args[1];
 
-    device_t * tag_controller = controller_interface_init(arena, initial_tags_filename, output_requests_filename);
+    device_t * tag_controller = controller_interface_init(arena, output_requests_filename);
     device_t * l2_cache = cache_init(arena, "L2", KILOBYTES(1024), 8, tag_controller);
 
     device_t * l1_instr_cache = cache_init(arena, "L1I", KILOBYTES(64), 4, l2_cache);
@@ -763,7 +774,9 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
                 for (u64 paddr_cap = start_addr_cap; paddr_cap < end_addr_cap; paddr_cap += CAP_SIZE_BYTES)
                 {
                     u8 tag_idx = get_tag_idx(paddr, paddr_cap);
+                    tag_set(cache_line, tag_idx, 0);
                     assert((cache_line->tags_cheri & (1 << tag_idx)) == 0);
+                    assert((cache_line->tags_known & (1 << tag_idx)) != 0);
                 }
             }
             else
@@ -778,28 +791,31 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
                         for (u64 paddr_cap = start_addr_cap; paddr_cap < end_addr_cap; paddr_cap += CAP_SIZE_BYTES)
                         {
                             u8 tag_idx = get_tag_idx(paddr, paddr_cap);
+
+                            // if the tag is already "known", then this should match what was there before
+                            assert((cache_line->tags_known & (1 << tag_idx)) == 0 ||
+                                ((cache_line->tags_cheri & (1 << tag_idx)) != 0) == current_entry.tag);
+
+                            tag_set(cache_line, tag_idx, current_entry.tag);
                             assert(((cache_line->tags_cheri & (1 << tag_idx)) != 0) == current_entry.tag);
+                            assert((cache_line->tags_known & (1 << tag_idx)) != 0);
                         }
                     } break;
                     case CUSTOM_TRACE_TYPE_STORE:
                     case CUSTOM_TRACE_TYPE_CSTORE:
                     {
-                        cache_line->dirty = true; // TODO do we check if the data actually changed?
+                        // NOTE for the CPU caches, we don't check if the data actually changed
+                        // TODO for the tag cache, we should check if the data actually changed before setting to dirty
+                        cache_line->dirty = true;
 
                         assert(current_entry.type != CUSTOM_TRACE_TYPE_STORE || current_entry.tag == 0);
                         for (u64 paddr_cap = start_addr_cap; paddr_cap < end_addr_cap; paddr_cap += CAP_SIZE_BYTES)
                         {
                             u8 tag_idx = get_tag_idx(paddr, paddr_cap);
 
-                            // TODO check this
-                            if (current_entry.tag)
-                            {
-                                cache_line->tags_cheri |= (1 << tag_idx);
-                            }
-                            else
-                            {
-                                cache_line->tags_cheri &= ~(1 << tag_idx);
-                            }
+                            tag_set(cache_line, tag_idx, current_entry.tag);
+                            assert(((cache_line->tags_cheri & (1 << tag_idx)) != 0) == current_entry.tag);
+                            assert((cache_line->tags_known & (1 << tag_idx)) != 0);
                         }
                     } break;
                     default: assert(!"Impossible.");
@@ -888,25 +904,26 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
      */
 }
 
+// TODO fix
 void trace_simulate_uncompressed(COMMAND_HANDLER_ARGS)
 {
-    if (num_args != 2)
+    if (num_args != 1)
     {
-        printf("Usage: %s %s <controller trace file> <initial state>\n", exe_name, cmd_name);
+        printf("Usage: %s %s <controller trace file>\n", exe_name, cmd_name);
         quit();
     }
 
     char * input_trace_filename = args[0];
-    char * initial_tags_filename = args[1];
+    // char * initial_tags_filename = args[1];
 
-    device_t * tag_controller = tag_cache_init(arena, initial_tags_filename, KILOBYTES(32), 4);
+    // device_t * tag_controller = tag_cache_init(arena, initial_tags_filename, KILOBYTES(32), 4);
 
     trace_reader_t input_trace =
         trace_reader_open(arena, input_trace_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
 
-    printf("Simulating with following configuration:\n");
-    device_print_configuration(tag_controller);
-    printf("\n");
+    // printf("Simulating with following configuration:\n");
+    // device_print_configuration(tag_controller);
+    // printf("\n");
 
     while (true)
     {
@@ -915,34 +932,42 @@ void trace_simulate_uncompressed(COMMAND_HANDLER_ARGS)
 
         assert(current_entry.size == CACHE_LINE_SIZE);
 
-        u64 paddr = current_entry.paddr;
+        u64 paddr = current_entry.addr;
         assert(check_paddr_valid(paddr));
         assert(paddr % CACHE_LINE_SIZE == 0);
         assert(paddr % CAP_SIZE_BYTES == 0);
 
         // TODO support larger cache line sizes?
         assert(current_entry.tags == (u8) current_entry.tags);
-        b8 tags_cheri = current_entry.tags;
+        // b8 tags_cheri = current_entry.tags;
+        // b8 tags_known = current_entry.tags_known; // TODO again, makes no sense
+
+        printf("%-6s [ addr: " FMT_ADDR ", tags data: %02X, tags known mask: %02X ]\n",
+            current_entry.type == TAG_CACHE_REQUEST_TYPE_READ ? "READ" :
+            current_entry.type == TAG_CACHE_REQUEST_TYPE_WRITE ? "WRITE" : "UNKNOWN",
+            current_entry.addr, current_entry.tags, current_entry.tags_known);
 
         switch (current_entry.type)
         {
             case TAG_CACHE_REQUEST_TYPE_READ:
             {
-                b8 tags_read = device_read(tag_controller, paddr);
-                assert(tags_read == tags_cheri);
+                // TODO this makes no sense, fix
+                // b8 tags_read, tags_known_read;
+                // device_read(tag_controller, paddr, &tags_read, &tags_known_read);
+                // assert(tags_read == tags_cheri);
             } break;
             case TAG_CACHE_REQUEST_TYPE_WRITE:
             {
-                device_write(tag_controller, paddr, tags_cheri);
+                // device_write(tag_controller, paddr, tags_cheri, tags_known);
             } break;
             default: assert(!"Impossible.");
         }
     }
 
-    printf("Statistics:\n");
-    device_print_statistics(tag_controller);
-    device_cleanup(tag_controller);
-    printf("\n");
+    // printf("Statistics:\n");
+    // device_print_statistics(tag_controller);
+    // device_cleanup(tag_controller);
+    // printf("\n");
 
     trace_reader_close(&input_trace);
 }

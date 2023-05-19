@@ -9,7 +9,8 @@
 // TODO do actual tag cache simulation
 // TODO alternatively, could output requests to tag cache, and run the tag cache simulation in a separate pass (might massively save time)
 
-static void cache_write_back(device_t * device, u64 paddr, b8 tags_cheri);
+static void cache_write_back(device_t * device, u64 paddr, b8 tags_cheri, b8 tags_known);
+static void cache_write_back_invisible(device_t * device, u64 paddr, b8 tags_cheri, b8 tags_known);
 
 static void get_initial_tags(char * initial_tags_filename, u32 tags_buffer_size, u8 * tags_buffer)
 {
@@ -54,15 +55,21 @@ device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename, u32 siz
     return device;
 }
 
-device_t * controller_interface_init(arena_t * arena, char * initial_tags_filename, char * output_filename)
+device_t * controller_interface_init(arena_t * arena, char * output_filename)
 {
     device_t * device = arena_push(arena, sizeof(device_t));
     *device = (device_t) {0};
     device->type = DEVICE_TYPE_CONTROLLER_INTERFACE;
 
-    device->controller_interface.tags_size = MEMORY_SIZE / CAP_SIZE_BYTES / 8;
-    device->controller_interface.tags = arena_push_array(arena, u8, device->controller_interface.tags_size);
-    get_initial_tags(initial_tags_filename, device->controller_interface.tags_size, device->controller_interface.tags);
+    u32 tag_table_size = MEMORY_SIZE / CAP_SIZE_BYTES / 8;
+    device->controller_interface.tags_size = tag_table_size;
+    device->controller_interface.tags = arena_push_array(arena, u8, tag_table_size);
+    device->controller_interface.tags_known = arena_push_array(arena, u8, tag_table_size);
+    for (i64 i = 0; i < tag_table_size; i++)
+    {
+        device->controller_interface.tags[i] = 0;
+        device->controller_interface.tags_known[i] = 0;
+    }
 
     assert(output_filename);
     if (file_exists(output_filename))
@@ -75,14 +82,18 @@ device_t * controller_interface_init(arena_t * arena, char * initial_tags_filena
     return device;
 }
 
-static void controller_interface_write_entry(device_t * device, u8 type, u64 paddr, b8 tags)
+static void controller_interface_write_entry(device_t * device, u8 type, u64 paddr, b8 tags, b8 tags_known)
 {
     assert(device->type == DEVICE_TYPE_CONTROLLER_INTERFACE);
 
+    // TODO make tags and tag_known u16 to support larger cache line sizes?
+
     tag_cache_request_t request = {0};
     request.type = type;
-    request.paddr = paddr;
+    request.addr = paddr;
+    assert((tags & ~tags_known) == 0);
     request.tags = tags;
+    request.tags_known = tags_known;
     static_assert(CACHE_LINE_SIZE <= UINT16_MAX, "Invalid cache line size.");
     request.size = CACHE_LINE_SIZE;
 
@@ -237,62 +248,120 @@ static void tag_cache_record_access(device_t * device, u64 paddr)
     assert(result->counter == 0);
 }
 
-void device_write(device_t * device, u64 paddr, b8 tags_cheri)
+static void update_unknown_tags(b8 * tags_cheri, b8 * tags_known, b8 new_tags_cheri, b8 new_tags_known)
+{
+    assert((*tags_cheri & ~(*tags_known)) == 0);
+    assert((new_tags_cheri & ~(new_tags_known)) == 0);
+    // TODO remove check? should be identical without
+    if (*tags_known != new_tags_known)
+    {
+        assert((*tags_known | new_tags_known) == new_tags_known); // check is superset
+        assert((*tags_cheri & *tags_known) == (new_tags_cheri & *tags_known)); // known bits unchanged
+
+        *tags_cheri = new_tags_cheri;
+        *tags_known = new_tags_known;
+    }
+    else
+    {
+        assert(*tags_cheri == new_tags_cheri);
+    }
+}
+
+void device_write(device_t * device, u64 paddr, b8 tags_cheri, b8 tags_known)
 {
     switch (device->type)
     {
         case DEVICE_TYPE_CACHE:
         {
-            cache_write_back(device, paddr, tags_cheri);
+            cache_write_back(device, paddr, tags_cheri, tags_known);
         } break;
         case DEVICE_TYPE_TAG_CACHE:
         {
-            tag_cache_record_access(device, paddr);
+            // TODO doesn't the tag cache need to know the tags? may want separate functions for that
+            tag_cache_record_access(device, paddr); // TODO should record a write back, not a normal read access?
+
             tag_table_write(device->tag_cache.tags, device->tag_cache.tags_size, paddr, tags_cheri);
+            tag_table_write(device->tag_cache.tags_known, device->tag_cache.tags_size, paddr, tags_known); // TODO
         } break;
         case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
             device->controller_interface.stats.writes++;
-            controller_interface_write_entry(device, TAG_CACHE_REQUEST_TYPE_WRITE, paddr, tags_cheri);
+            controller_interface_write_entry(device, TAG_CACHE_REQUEST_TYPE_WRITE, paddr, tags_cheri, tags_known);
 
-            tag_table_write(device->controller_interface.tags, device->controller_interface.tags_size,
-                paddr, tags_cheri);
+            tag_table_write(device->controller_interface.tags,
+                device->controller_interface.tags_size, paddr, tags_cheri);
+            tag_table_write(device->controller_interface.tags_known,
+                device->controller_interface.tags_size, paddr, tags_known);
 
         } break;
         default: assert(!"Impossible.");
     }
 }
 
-b8 device_read(device_t * device, u64 paddr)
+void device_write_invisible(device_t * device, u64 paddr, b8 tags_cheri, b8 tags_known)
+{
+    switch (device->type)
+    {
+        case DEVICE_TYPE_CACHE:
+        {
+            cache_write_back_invisible(device, paddr, tags_cheri, tags_known);
+        } break;
+        case DEVICE_TYPE_CONTROLLER_INTERFACE:
+        {
+            b8 old_tags_cheri = tag_table_read(device->controller_interface.tags, device->controller_interface.tags_size, paddr);
+            b8 old_tags_known = tag_table_read(device->controller_interface.tags_known, device->controller_interface.tags_size, paddr);
+
+            // TODO this doesn't really make sense here. replace update_unknown_tags with a function that just does the checks?
+            update_unknown_tags(&old_tags_cheri, &old_tags_known, tags_cheri, tags_known);
+
+            assert(old_tags_known == tags_known);
+            assert(old_tags_cheri == tags_cheri);
+
+            tag_table_write(device->controller_interface.tags,
+                device->controller_interface.tags_size, paddr, tags_cheri);
+            tag_table_write(device->controller_interface.tags_known,
+                device->controller_interface.tags_size, paddr, tags_known);
+        } break;
+        default: assert(!"Impossible.");
+    }
+
+    // /* NOTE while writing to the parent is not necessary for accuracy, it means that if a
+    //  * CLOAD results in a miss in the LLC because it was the first time that data was read,
+    //  * the output entry will contain the tag data from this CLOAD. */
+    // if (device->parent)
+    //     device_write_invisible(device->parent, paddr, tags_cheri, tags_known);
+}
+
+void device_read(device_t * device, u64 paddr, u8 * tags_cheri, u8 * tags_known)
 {
     switch (device->type)
     {
         case DEVICE_TYPE_CACHE:
         {
             cache_line_t * cache_line = cache_request(device, paddr);
-            return cache_line->tags_cheri;
+
+            *tags_cheri = cache_line->tags_cheri;
+            *tags_known = cache_line->tags_known;
         } break;
         case DEVICE_TYPE_TAG_CACHE:
         {
             tag_cache_record_access(device, paddr);
-            b8 tags_cheri = tag_table_read(device->tag_cache.tags, device->tag_cache.tags_size, paddr);
-            return tags_cheri;
+
+            // TODO
+            *tags_cheri = tag_table_read(device->tag_cache.tags, device->tag_cache.tags_size, paddr);
+            *tags_known = tag_table_read(device->tag_cache.tags_known, device->tag_cache.tags_size, paddr);
         } break;
         case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
             device->controller_interface.stats.reads++;
 
-            b8 tags_cheri = tag_table_read(device->controller_interface.tags, device->controller_interface.tags_size, paddr);
+            *tags_cheri = tag_table_read(device->controller_interface.tags, device->controller_interface.tags_size, paddr);
+            *tags_known = tag_table_read(device->controller_interface.tags_known, device->controller_interface.tags_size, paddr);
 
-            controller_interface_write_entry(device, TAG_CACHE_REQUEST_TYPE_WRITE, paddr, tags_cheri);
-
-            return tags_cheri;
+            controller_interface_write_entry(device, TAG_CACHE_REQUEST_TYPE_READ, paddr, *tags_cheri, *tags_known);
         } break;
         default: assert(!"Impossible.");
     }
-
-    assert(!"Impossible.");
-    return 0;
 }
 
 
@@ -358,7 +427,9 @@ static inline i64 cache_find_existing(device_t * device, u64 tag_addr, u32 * set
 
 // TODO optional logging?
 
-static void cache_write_back(device_t * device, u64 paddr, b8 tags_cheri)
+// TODO struct for tags_cheri and tags_known?
+
+static void cache_write_back(device_t * device, u64 paddr, b8 tags_cheri, b8 tags_known)
 {
     assert(device->type == DEVICE_TYPE_CACHE);
     assert(paddr % CACHE_LINE_SIZE == 0);
@@ -376,9 +447,30 @@ static void cache_write_back(device_t * device, u64 paddr, b8 tags_cheri)
     assert(result->tag_addr == tag_addr);
 
     result->tags_cheri = tags_cheri;
+    result->tags_known = tags_known;
     result->dirty = true;
 
     // NOTE assuming write backs do not affect replacement policy counters
+}
+
+static void cache_write_back_invisible(device_t * device, u64 paddr, b8 tags_cheri, b8 tags_known)
+{
+    assert(device->type == DEVICE_TYPE_CACHE);
+    assert(paddr % CACHE_LINE_SIZE == 0);
+
+    u64 tag_addr = paddr >> CACHE_LINE_SIZE_BITS;
+    u32 set_start_idx;
+    i64 way = cache_find_existing(device, tag_addr, &set_start_idx);
+
+    // since these caches are inclusive, we can assume that the cache line to overwrite already exists
+    // (and no need to forward invisible write back to next level in hierarchy)
+    assert(way >= 0);
+
+    cache_line_t * result = &device->cache.entries[set_start_idx + way];
+    assert(result->tag_addr != INVALID_TAG);
+    assert(result->tag_addr == tag_addr);
+
+    update_unknown_tags(&result->tags_cheri, &result->tags_known, tags_cheri, tags_known);
 }
 
 cache_line_t * cache_request(device_t * device, u64 paddr)
@@ -386,7 +478,7 @@ cache_line_t * cache_request(device_t * device, u64 paddr)
     assert(device->type == DEVICE_TYPE_CACHE);
     assert(paddr % CACHE_LINE_SIZE == 0);
 
-    // printf("cache request [ name: '%s', address: %lu ]\n", device->cache.name, paddr);
+    // printf("cache request [ name: '%s', address: " FMT_ADDR " ]\n", device->cache.name, paddr);
 
     u64 tag_addr = paddr >> CACHE_LINE_SIZE_BITS;
     u32 set_start_idx;
@@ -458,17 +550,24 @@ cache_line_t * cache_request(device_t * device, u64 paddr)
                 if (child_way >= 0)
                 {
                     cache_line_t * child_cache_line = &child->cache.entries[child_set_start_idx + child_way];
+
+                    assert(child->parent == device);
+                    assert(child_cache_line->tag_addr != INVALID_TAG);
+                    assert(child_cache_line->tag_addr == line_to_replace->tag_addr);
+
                     if (child_cache_line->dirty)
                     {
                         num_children_dirty++;
 
-                        assert(child->parent == device);
-                        assert(child_cache_line->tag_addr != INVALID_TAG);
-                        assert(child_cache_line->tag_addr == line_to_replace->tag_addr);
-
                         // write back from child to this cache
                         child->cache.stats.write_backs++;
-                        cache_write_back(device, child_cache_line->tag_addr << CACHE_LINE_SIZE_BITS, child_cache_line->tags_cheri);
+                        cache_write_back(device, child_cache_line->tag_addr << CACHE_LINE_SIZE_BITS,
+                            child_cache_line->tags_cheri, child_cache_line->tags_known);
+                    }
+                    else
+                    {
+                        cache_write_back_invisible(device, child_cache_line->tag_addr << CACHE_LINE_SIZE_BITS,
+                            child_cache_line->tags_cheri, child_cache_line->tags_known);
                     }
 
                     child->cache.stats.invalidations++;
@@ -485,35 +584,19 @@ cache_line_t * cache_request(device_t * device, u64 paddr)
                 assert(line_to_replace->tag_addr != INVALID_TAG);
 
                 device->cache.stats.write_backs++;
-                device_write(device->parent, line_to_replace->tag_addr << CACHE_LINE_SIZE_BITS, line_to_replace->tags_cheri);
+                device_write(device->parent, line_to_replace->tag_addr << CACHE_LINE_SIZE_BITS,
+                    line_to_replace->tags_cheri, line_to_replace->tags_known);
             }
             else
             {
-                // TODO handle tag cache as well when we have that
-                // TODO could create a utility function with a switch statement inside? device_check_for() or sth
-                if (device->parent->type == DEVICE_TYPE_CACHE)
-                {
-                    // check tags match what we have in the next cache
-                    u32 parent_set_start_idx;
-                    i64 parent_way = cache_find_existing(device->parent, line_to_replace->tag_addr, &parent_set_start_idx);
-
-                    assert(parent_way >= 0);
-                    assert(device->parent->cache.entries[parent_set_start_idx + parent_way].tags_cheri == line_to_replace->tags_cheri);
-                }
-                else if (device->parent->type == DEVICE_TYPE_CONTROLLER_INTERFACE)
-                {
-                    // check tags match tag table
-                    u64 paddr = line_to_replace->tag_addr << CACHE_LINE_SIZE_BITS;
-                    b8 tags_cheri = tag_table_read(device->parent->controller_interface.tags,
-                        device->parent->controller_interface.tags_size, paddr);
-                    assert(tags_cheri == line_to_replace->tags_cheri);
-                }
-                else assert(0);
+                device_write_invisible(device->parent, line_to_replace->tag_addr << CACHE_LINE_SIZE_BITS,
+                    line_to_replace->tags_cheri, line_to_replace->tags_known);
             }
         }
 
         // forward read to next level cache
-        b8 tags_cheri = device_read(device->parent, paddr);
+        b8 tags_cheri, tags_known;
+        device_read(device->parent, paddr, &tags_cheri, &tags_known);
 
         assert(CACHE_LINE_SIZE % CAP_SIZE_BYTES == 0);
         assert(CACHE_LINE_SIZE / CAP_SIZE_BYTES <= 8);
@@ -522,6 +605,7 @@ cache_line_t * cache_request(device_t * device, u64 paddr)
         line_to_replace->dirty = false;
         line_to_replace->tag_addr = tag_addr;
         line_to_replace->tags_cheri = tags_cheri;
+        line_to_replace->tags_known = tags_known;
 
         result = line_to_replace;
 

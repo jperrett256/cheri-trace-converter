@@ -60,6 +60,7 @@ struct cache_line_t
     u64 tag_addr;
     u16 counter;
     b8 tags_cheri; // TODO make 16 bits?
+    b8 tags_known; // TODO make 16 bits?
     bool dirty;
 };
 
@@ -80,7 +81,9 @@ struct tag_cache_t
     u32 num_ways;
     cache_line_t * entries; // NOTE won't store tag in them
     u32 tags_size;
-    u8 * tags; // NOTE tag controller's view of memory
+    // NOTE the tag table here reflects the controller's view of memory
+    u8 * tags;
+    u8 * tags_known;
     tag_cache_stats_t stats;
 };
 
@@ -89,7 +92,9 @@ struct controller_interface_t
 {
 	trace_writer_t output;
     u32 tags_size;
-    u8 * tags; // NOTE tag controller's view of memory
+    // NOTE the tag table here reflects the controller's view of memory
+    u8 * tags;
+    u8 * tags_known;
     controller_interface_stats_t stats;
 };
 
@@ -121,10 +126,10 @@ cache_line_t * cache_request(device_t * device, u64 paddr);
 device_t * cache_init(arena_t * arena, char * name, u32 size, u32 num_ways, device_t * parent);
 
 device_t * tag_cache_init(arena_t * arena, char * initial_tags_filename, u32 size, u32 num_ways);
-device_t * controller_interface_init(arena_t * arena, char * initial_tags_filename, char * output_filename);
+device_t * controller_interface_init(arena_t * arena, char * output_filename);
 
-void device_write(device_t * device, u64 paddr, b8 tags_cheri);
-b8 device_read(device_t * device, u64 paddr);
+void device_write(device_t * device, u64 paddr, b8 tags_cheri, b8 tags_known);
+void device_read(device_t * device, u64 paddr, b8 * tags_cheri, b8 * tags_known);
 
 void device_print_configuration(device_t * device);
 void device_print_statistics(device_t * device);
