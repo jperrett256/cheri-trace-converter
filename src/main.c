@@ -33,7 +33,7 @@ void print_commands_and_quit(char * exe_name, command_t * commands, u32 num_comm
 
 int main(int argc, char * argv[])
 {
-    arena_t arena = arena_alloc(MEGABYTES(64));
+    arena_t arena = arena_alloc(MEGABYTES(512));
 
     // TODO add help text?
     command_t commands[] =
@@ -64,8 +64,8 @@ int main(int argc, char * argv[])
             trace_convert_drcachesim_paddr
         },
         {
-            string_lit("get-initial-tags"),
-            trace_get_initial_tags
+            string_lit("get-initial-accesses"),
+            trace_get_initial_accesses
         },
         {
             string_lit("simulate"),

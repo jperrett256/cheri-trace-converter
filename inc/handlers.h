@@ -11,7 +11,7 @@ void trace_convert(COMMAND_HANDLER_ARGS);
 void trace_convert_generic(COMMAND_HANDLER_ARGS);
 void trace_convert_drcachesim_vaddr(COMMAND_HANDLER_ARGS);
 void trace_convert_drcachesim_paddr(COMMAND_HANDLER_ARGS);
-void trace_get_initial_tags(COMMAND_HANDLER_ARGS);
+void trace_get_initial_accesses(COMMAND_HANDLER_ARGS);
 void trace_simulate(COMMAND_HANDLER_ARGS);
 void trace_simulate_uncompressed(COMMAND_HANDLER_ARGS);
 

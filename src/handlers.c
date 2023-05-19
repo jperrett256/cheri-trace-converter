@@ -474,7 +474,7 @@ void trace_convert_drcachesim_paddr(COMMAND_HANDLER_ARGS)
 }
 
 
-void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
+void trace_get_initial_accesses(COMMAND_HANDLER_ARGS)
 {
     if (num_args != 2)
     {
@@ -483,45 +483,35 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
     }
 
     char * input_trace_filename = args[0];
-    char * initial_tags_filename = args[1];
+    char * initial_state_filename = args[1];
 
-    if (file_exists_not_fifo(initial_tags_filename))
+    if (file_exists_not_fifo(initial_state_filename))
     {
-        if (!confirm_overwrite_file(initial_tags_filename)) quit();
+        if (!confirm_overwrite_file(initial_state_filename)) quit();
     }
 
     trace_reader_t input_trace =
         trace_reader_open(arena, input_trace_filename, guess_reader_type(input_trace_filename));
 
-    FILE * initial_tags_file = fopen(initial_tags_filename, "wb");
-    assert(initial_tags_file);
+    FILE * initial_state_file = fopen(initial_state_filename, "wb");
+    assert(initial_state_file);
 
+    static_assert(sizeof(initial_access_t) == 1, "Expect initial access record type to be a single byte.");
 
-    i64 tag_table_size = MEMORY_SIZE / CAP_SIZE_BYTES / 8;
-    u8 * initial_tag_state = arena_push_array(arena, u8, tag_table_size);
-    for (i64 i = 0; i < tag_table_size; i++) initial_tag_state[i] = 0;
+    i64 initial_state_table_size = MEMORY_SIZE / CAP_SIZE_BYTES;
+    initial_access_t * initial_state_table = arena_push_array(arena, initial_access_t, initial_state_table_size);
+    for (i64 i = 0; i < initial_state_table_size; i++)
+    {
+        // TODO get some stats
 
-    /* TODO
-     * Need to test if the default tag state affects anything (if 0, 1 or random has any affect).
-     *  - Worth noting that memory that is not accessed, but within the same page as memory that is, likely has 0 for its tag.
-     *    (Since pages are zero-initialised.)
-     *      - If you account for this, and having 1s vs 0s still has an effect (due to the coverage of a root table cache line),
-     *        that would imply that other programs can affect the caching of this program. Side-channel concerns?
-     */
-
-    set_u64 initialized_tags = set_u64_create(); // all keys should be CAP_SIZE_BITS aligned
-    set_u64 dbg_modified_tags = set_u64_create(); // keep track of which tags do not match initial tag state
-
-    set_u64 initialized_tags_INSTRs = set_u64_create();
-    set_u64 initialized_tags_LOADs = set_u64_create();
-    set_u64 initialized_tags_CLOADs = set_u64_create();
+        initial_state_table[i].type = -1;
+        initial_state_table[i].tag = 0;
+    }
 
     i64 dbg_paddrs_missing = 0;
     i64 dbg_paddrs_invalid = 0;
 
-    i64 dbg_assumed_tag_incorrect_INSTRs = 0;
-    i64 dbg_assumed_tag_incorrect_LOADs = 0;
-    i64 dbg_assumed_tag_incorrect_CLOADs = 0;
+    // TODO check for supposedly impossible cases (CLOAD -> no modification -> CLOAD with different tag)?
 
     while (true)
     {
@@ -530,7 +520,7 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
 
         if (!check_paddr_valid(current_entry.paddr))
         {
-            if (current_entry.paddr == 0) dbg_paddrs_missing++;
+            if (current_entry.paddr == -1) dbg_paddrs_missing++;
             else dbg_paddrs_invalid++;
 
             continue;
@@ -544,123 +534,38 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
 
         for (u64 paddr = start_addr; paddr < end_addr; paddr += CAP_SIZE_BYTES)
         {
-            // TODO utility function for getting tag table idx?
             assert(check_paddr_valid(paddr));
             u64 mem_offset = paddr - BASE_PADDR;
 
-            i64 tag_table_idx = mem_offset / CAP_SIZE_BYTES / 8;
-            i8 tag_entry_bit = mem_offset / CAP_SIZE_BYTES % 8;
-            assert(tag_table_idx >= 0 && tag_table_idx < tag_table_size);
+            assert(mem_offset % CAP_SIZE_BYTES == 0);
+            i64 table_idx = mem_offset / CAP_SIZE_BYTES;
+            assert(table_idx >= 0 && table_idx < initial_state_table_size);
 
-            bool already_found_first_access = set_u64_contains(initialized_tags, paddr);
-            if (!already_found_first_access)
+            if (initial_state_table[table_idx].type == -1)
             {
                 switch (current_entry.type)
                 {
                     case CUSTOM_TRACE_TYPE_INSTR:
-                    {
-                        set_u64_insert(initialized_tags_INSTRs, paddr);
-                        assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) == 0);
-                        // NOTE assuming tag is 0, leaving as initialised
-                    } break;
-                    case CUSTOM_TRACE_TYPE_LOAD:
-                    {
-                        set_u64_insert(initialized_tags_LOADs, paddr);
-                        // NOTE assuming tag is 0, leaving as initialised
-                        assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) == 0);
-                    } break;
                     case CUSTOM_TRACE_TYPE_STORE:
-                    {
-                        set_u64_insert(dbg_modified_tags, paddr);
-                        // NOTE assuming tag before store is 0, leaving as initialised
-                        assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) == 0);
-                    } break;
-                    case CUSTOM_TRACE_TYPE_CLOAD:
-                    {
-                        set_u64_insert(initialized_tags_CLOADs, paddr);
-                        assert(paddr == current_entry.paddr && "Unaligned CLOAD.");
-                        if (current_entry.tag) // TODO get rid of branch?
-                        {
-                            initial_tag_state[tag_table_idx] |= 1 << tag_entry_bit;
-                            assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) != 0);
-                        }
-                        else assert((initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) == 0);
-                    } break;
-                    case CUSTOM_TRACE_TYPE_CSTORE:
-                    {
-                        set_u64_insert(dbg_modified_tags, paddr);
-                        assert(paddr == current_entry.paddr && "Unaligned CSTORE.");
-                        // NOTE assuming tag is 1
-                        /* TODO does this actually affect caching behaviour?
-                         * If you are setting the entire cache line, do you even need to read from memory/cache first?
-                         * (can you not just update/create an entry in L1 and be done with it?) *QUESTION*
-                         */
-                        initial_tag_state[tag_table_idx] |= 1 << tag_entry_bit;
-                    } break;
-                    default: assert(!"Impossible.");
+                    case CUSTOM_TRACE_TYPE_LOAD:
+                        assert(current_entry.tag == 0);
+                        break;
                 }
+                assert(current_entry.tag == 0 || current_entry.tag == 1);
 
-                set_u64_insert(initialized_tags, paddr);
-            }
-            else
-            {
-                if (current_entry.type == CUSTOM_TRACE_TYPE_STORE || current_entry.type == CUSTOM_TRACE_TYPE_CSTORE)
-                {
-                    set_u64_insert(dbg_modified_tags, paddr);
-                }
-                else if (current_entry.type == CUSTOM_TRACE_TYPE_CLOAD)
-                {
-                    bool was_modified_since_init = set_u64_contains(dbg_modified_tags, paddr);
-                    if (!was_modified_since_init)
-                    {
-                        bool recorded_tag_value = (initial_tag_state[tag_table_idx] & (1 << tag_entry_bit)) != 0;
-                        if (recorded_tag_value != current_entry.tag)
-                        {
-                            // NOTE the LOADs are the main one I'm worried about (LOADs followed by a CLOAD reading a 1 for the tag)
-
-                            if (set_u64_contains(initialized_tags_INSTRs, paddr))
-                                dbg_assumed_tag_incorrect_INSTRs++;
-                            else if (set_u64_contains(initialized_tags_LOADs, paddr))
-                                dbg_assumed_tag_incorrect_LOADs++;
-                            else if (set_u64_contains(initialized_tags_CLOADs, paddr))
-                                dbg_assumed_tag_incorrect_CLOADs++;
-                            else
-                                assert(!"Impossible");
-                        }
-                    }
-                }
+                initial_state_table[table_idx].type = current_entry.type;
+                initial_state_table[table_idx].tag = current_entry.tag;
             }
         }
     }
 
     printf("Entries missing paddrs (skipped): %ld\n", dbg_paddrs_missing);
     printf("Entries with invalid paddrs (skipped): %ld\n", dbg_paddrs_invalid);
-    printf("Number of times tags were incorrect (INSTRs): %ld\n", dbg_assumed_tag_incorrect_INSTRs);
-    printf("Number of times tags were incorrect (LOADs): %ld\n", dbg_assumed_tag_incorrect_LOADs);
-    printf("Number of times tags were incorrect (CLOADs): %ld\n", dbg_assumed_tag_incorrect_CLOADs);
 
-    fwrite(initial_tag_state, 1, tag_table_size, initial_tags_file);
-    fclose(initial_tags_file);
+    fwrite(initial_state_table, 1, initial_state_table_size, initial_state_file);
+    fclose(initial_state_file);
 
     trace_reader_close(&input_trace);
-
-    /* TODO
-     * create 16 MiB buffer of tags, set to zero, that we'll update over time
-     * create set that we'll fill with entries indicating whether or not we already have the initial value of a tag or not
-     * LOADs/STOREs - assume it was 0 before
-     * (with LOADs, maybe check for following CLOADs that say otherwise?)
-     * (with STOREs, assert folowing CLOADs read 0 for the tag)
-     * with CLOADs, we have the original tag value
-     * with CSTOREs, we don't know, so we can just assume they were 1s
-        - Does this actually affect caching behaviour? If you are setting the entire cache line, do you even need to read from memory/cache first?
-          (can you not just update/create an entry in L1 and be done with it?) *QUESTION*
-     */
-
-    set_u64_cleanup(&initialized_tags);
-    set_u64_cleanup(&dbg_modified_tags);
-    set_u64_cleanup(&initialized_tags_INSTRs);
-    set_u64_cleanup(&initialized_tags_LOADs);
-    set_u64_cleanup(&initialized_tags_CLOADs);
 }
 
 

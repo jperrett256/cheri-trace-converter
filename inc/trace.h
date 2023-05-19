@@ -22,6 +22,15 @@ struct custom_trace_entry_t
     uint64_t paddr;
 };
 
+
+typedef struct initial_access_t initial_access_t;
+struct initial_access_t
+{
+    int8_t type : 7;
+    uint8_t tag : 1;
+};
+
+
 enum tag_cache_request_type_t
 {
     TAG_CACHE_REQUEST_TYPE_READ,
