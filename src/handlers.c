@@ -474,6 +474,46 @@ void trace_convert_drcachesim_paddr(COMMAND_HANDLER_ARGS)
 }
 
 
+typedef struct initial_state_stats_t initial_state_stats_t;
+struct initial_state_stats_t
+{
+    u64 num_INSTRs;
+    u64 num_LOADs;
+    u64 num_STOREs;
+    u64 num_CLOADs;
+    u64 num_CSTOREs;
+
+    u64 num_CLOADs_tag_set;
+    u64 num_CSTOREs_tag_set;
+
+    u64 num_LOADs_overwritten_with_CLOADs;
+    u64 num_LOADs_overwritten_with_CLOADs_tag_set;
+
+    u64 num_CLOADs_after_mismatched_CLOAD;
+    u64 num_paddrs_missing;
+    u64 num_paddrs_invalid;
+};
+
+static void print_initial_state_stats(initial_state_stats_t * stats)
+{
+    printf("Statistics:\n");
+    printf(INDENT4 "Instructions: %lu\n", stats->num_INSTRs);
+    printf(INDENT4 "LOADs: %lu\n", stats->num_LOADs);
+    printf(INDENT4 "STOREs: %lu\n", stats->num_STOREs);
+    printf(INDENT4 "CLOADs: %lu\n", stats->num_CLOADs);
+    printf(INDENT4 "CSTOREs: %lu\n", stats->num_CSTOREs);
+    printf("\n");
+    printf(INDENT4 "CLOADs with tag set: %lu\n", stats->num_CLOADs_tag_set);
+    printf(INDENT4 "CSTOREs with tag set: %lu\n", stats->num_CSTOREs_tag_set);
+    printf("\n");
+    printf(INDENT4 "LOADs overwritten with CLOADs: %lu\n", stats->num_LOADs_overwritten_with_CLOADs);
+    printf(INDENT4 "LOADs overwritten with CLOADs with tag set: %lu\n", stats->num_LOADs_overwritten_with_CLOADs_tag_set);
+    printf("\n");
+    printf(INDENT4 "CLOADs followed by another CLOAD reading a different tag: %lu\n", stats->num_CLOADs_after_mismatched_CLOAD);
+    printf(INDENT4 "Missing paddrs (skipped): %lu\n", stats->num_paddrs_missing);
+    printf(INDENT4 "Invalid paddrs (skipped): %lu\n", stats->num_paddrs_invalid);
+}
+
 void trace_get_initial_accesses(COMMAND_HANDLER_ARGS)
 {
     if (num_args != 2)
@@ -502,16 +542,13 @@ void trace_get_initial_accesses(COMMAND_HANDLER_ARGS)
     initial_access_t * initial_state_table = arena_push_array(arena, initial_access_t, initial_state_table_size);
     for (i64 i = 0; i < initial_state_table_size; i++)
     {
-        // TODO get some stats
-
         initial_state_table[i].type = -1;
         initial_state_table[i].tag = 0;
     }
 
-    i64 dbg_paddrs_missing = 0;
-    i64 dbg_paddrs_invalid = 0;
+    initial_state_stats_t dbg_stats = {0};
 
-    // TODO check for supposedly impossible cases (CLOAD -> no modification -> CLOAD with different tag)?
+    set_u64 modified_paddrs = set_u64_create();
 
     while (true)
     {
@@ -520,8 +557,8 @@ void trace_get_initial_accesses(COMMAND_HANDLER_ARGS)
 
         if (!check_paddr_valid(current_entry.paddr))
         {
-            if (current_entry.paddr == -1) dbg_paddrs_missing++;
-            else dbg_paddrs_invalid++;
+            if (current_entry.paddr == -1) dbg_stats.num_paddrs_missing++;
+            else dbg_stats.num_paddrs_invalid++;
 
             continue;
         }
@@ -541,31 +578,95 @@ void trace_get_initial_accesses(COMMAND_HANDLER_ARGS)
             i64 table_idx = mem_offset / CAP_SIZE_BYTES;
             assert(table_idx >= 0 && table_idx < initial_state_table_size);
 
+
             if (initial_state_table[table_idx].type == -1)
             {
+                assert(current_entry.tag == 0 || current_entry.tag == 1);
+
                 switch (current_entry.type)
                 {
                     case CUSTOM_TRACE_TYPE_INSTR:
-                    case CUSTOM_TRACE_TYPE_STORE:
-                    case CUSTOM_TRACE_TYPE_LOAD:
+                    {
+                        dbg_stats.num_INSTRs++;
                         assert(current_entry.tag == 0);
-                        break;
+                    } break;
+                    case CUSTOM_TRACE_TYPE_LOAD:
+                    {
+                        dbg_stats.num_LOADs++;
+                        // TODO unknown tags? use -1?
+                        assert(current_entry.tag == 0);
+                    } break;
+                    case CUSTOM_TRACE_TYPE_STORE:
+                    {
+                        dbg_stats.num_STOREs++;
+                        assert(current_entry.tag == 0);
+                    } break;
+                    case CUSTOM_TRACE_TYPE_CLOAD:
+                    {
+                        dbg_stats.num_CLOADs++;
+                        if (current_entry.tag) dbg_stats.num_CLOADs_tag_set++;
+                    } break;
+                    case CUSTOM_TRACE_TYPE_CSTORE:
+                    {
+                        dbg_stats.num_CSTOREs++;
+                        if (current_entry.tag) dbg_stats.num_CSTOREs_tag_set++;
+                    } break;
+                    default: assert("!Impossible.");
                 }
+
+                initial_state_table[table_idx].type = current_entry.type;
+                initial_state_table[table_idx].tag = current_entry.tag;
+            }
+            else if (initial_state_table[table_idx].type == CUSTOM_TRACE_TYPE_LOAD
+                && current_entry.type == CUSTOM_TRACE_TYPE_CLOAD
+                && !set_u64_contains(modified_paddrs, paddr))
+            {
+                dbg_stats.num_LOADs_overwritten_with_CLOADs++;
+                if (current_entry.tag) dbg_stats.num_LOADs_overwritten_with_CLOADs_tag_set++;
+
+                // TODO unknown tags? use -1 for LOADs?
                 assert(current_entry.tag == 0 || current_entry.tag == 1);
 
                 initial_state_table[table_idx].type = current_entry.type;
                 initial_state_table[table_idx].tag = current_entry.tag;
             }
+            else if (initial_state_table[table_idx].type == CUSTOM_TRACE_TYPE_CLOAD
+                && current_entry.type == CUSTOM_TRACE_TYPE_CLOAD
+                && !set_u64_contains(modified_paddrs, paddr))
+            {
+                // checks for: CLOAD -> no modification -> CLOAD with different tag
+                // (supposedly impossible case, may happen with userspace traces)
+
+                dbg_stats.num_CLOADs_after_mismatched_CLOAD++;
+            }
+
+            if (current_entry.type == CUSTOM_TRACE_TYPE_STORE
+                || current_entry.type == CUSTOM_TRACE_TYPE_CSTORE)
+            {
+                assert(paddr % CAP_SIZE_BYTES == 0);
+                set_u64_insert(modified_paddrs, paddr);
+            }
         }
     }
-
-    printf("Entries missing paddrs (skipped): %ld\n", dbg_paddrs_missing);
-    printf("Entries with invalid paddrs (skipped): %ld\n", dbg_paddrs_invalid);
 
     fwrite(initial_state_table, 1, initial_state_table_size, initial_state_file);
     fclose(initial_state_file);
 
+    print_initial_state_stats(&dbg_stats);
+
+    u64 num_accessed_paddrs = 0;
+    for (i64 i = 0; i < initial_state_table_size; i++)
+    {
+        if (initial_state_table[i].type != -1) num_accessed_paddrs++;
+    }
+
+    printf("\n");
+    printf(INDENT4 "Number of accessed capability-aligned addresses: %lu\n", num_accessed_paddrs);
+    printf(INDENT4 "Number of modified capability-aligned addresses: %lu\n", set_u64_size(modified_paddrs));
+
     trace_reader_close(&input_trace);
+
+    set_u64_cleanup(&modified_paddrs);
 }
 
 

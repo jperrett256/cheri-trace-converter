@@ -23,6 +23,7 @@ struct custom_trace_entry_t
 };
 
 
+// TODO if we want unknown bits, we could have 2 bits for the tag and 6 for the type
 typedef struct initial_access_t initial_access_t;
 struct initial_access_t
 {
