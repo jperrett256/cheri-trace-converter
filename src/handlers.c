@@ -207,7 +207,7 @@ void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
     char * input_filename = args[0];
     char * output_filename = args[1];
 
-    if (file_exists(output_filename))
+    if (file_exists_not_fifo(output_filename))
     {
         printf("ERROR: Attempted to overwrite existing file \"%s\".\n", output_filename);
         quit();
@@ -310,7 +310,7 @@ void trace_convert(COMMAND_HANDLER_ARGS)
     char * input_filename = args[0];
     char * output_filename = args[1];
 
-    if (file_exists(output_filename))
+    if (file_exists_not_fifo(output_filename))
     {
         if (!confirm_overwrite_file(output_filename)) quit();
     }
@@ -349,7 +349,7 @@ void trace_convert_generic(COMMAND_HANDLER_ARGS)
     char * input_filename = args[0];
     char * output_filename = args[1];
 
-    if (file_exists(output_filename))
+    if (file_exists_not_fifo(output_filename))
     {
         if (!confirm_overwrite_file(output_filename)) quit();
     }
@@ -383,7 +383,7 @@ void trace_convert_drcachesim_vaddr(COMMAND_HANDLER_ARGS)
     char * input_trace_filename = args[0];
     char * output_trace_filename = args[1];
 
-    if (file_exists(output_trace_filename))
+    if (file_exists_not_fifo(output_trace_filename))
     {
         if (!confirm_overwrite_file(output_trace_filename)) quit();
     }
@@ -435,7 +435,7 @@ void trace_convert_drcachesim_paddr(COMMAND_HANDLER_ARGS)
     char * input_trace_filename = args[0];
     char * output_trace_filename = args[1];
 
-    if (file_exists(output_trace_filename))
+    if (file_exists_not_fifo(output_trace_filename))
     {
         if (!confirm_overwrite_file(output_trace_filename)) quit();
     }
@@ -485,10 +485,9 @@ void trace_get_initial_tags(COMMAND_HANDLER_ARGS)
     char * input_trace_filename = args[0];
     char * initial_tags_filename = args[1];
 
-    if (file_exists(initial_tags_filename))
+    if (file_exists_not_fifo(initial_tags_filename))
     {
-        printf("ERROR: Attempted to overwrite existing file \"%s\".\n", initial_tags_filename);
-        quit();
+        if (!confirm_overwrite_file(initial_tags_filename)) quit();
     }
 
     trace_reader_t input_trace =

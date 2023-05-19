@@ -5,22 +5,24 @@
 #include <stdlib.h>
 #include <assert.h>
 
+#include <sys/stat.h>
+#include <unistd.h>
+
 void quit(void)
 {
     printf("Quitting.\n");
     exit(1);
 }
 
-bool file_exists(char * filename)
+bool file_exists_not_fifo(char * filename)
 {
-    FILE * fd = fopen(filename, "rb");
-    if (fd) fclose(fd);
-    return fd != NULL;
+    struct stat buf;
+    return stat(filename, &buf) == 0 && !S_ISFIFO(buf.st_mode);
 }
 
 bool confirm_overwrite_file(char * filename)
 {
-    assert(file_exists(filename));
+    assert(file_exists_not_fifo(filename));
 
     bool result = false;
     while (true)

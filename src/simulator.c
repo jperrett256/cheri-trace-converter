@@ -76,7 +76,7 @@ device_t * controller_interface_init(arena_t * arena, char * output_filename)
     }
 
     assert(output_filename);
-    if (file_exists(output_filename))
+    if (file_exists_not_fifo(output_filename))
     {
         if (!confirm_overwrite_file(output_filename)) quit();
     }
