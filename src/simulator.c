@@ -712,10 +712,23 @@ static inline void update_coherence_search_state(i8 search_result, bool * found_
     }
 }
 
+static void cache_read_back_invisible_recursive(device_t * device, u64 paddr)
+{
+    for (i64 i = 0; i < device->num_children; i++)
+    {
+        cache_read_back_invisible_recursive(device->children[i], paddr);
+    }
+
+    cache_read_back_invisible(device, paddr);
+}
+
 static i8 coherence_flush(device_t * device, u64 paddr, bool should_invalidate)
 {
     assert(device->type == DEVICE_TYPE_CACHE);
 
+    /* TODO if we find it in multiple children (i.e. multiple sharers), and the
+     * copy of the cache line in one child is more up to date, then writing back
+     * in the wrong order could break this! */
     bool found_clean_in_children = false;
     bool found_modified_in_child = false;
     for (i64 i = 0; i < device->num_children; i++)
@@ -760,6 +773,16 @@ static i8 coherence_flush(device_t * device, u64 paddr, bool should_invalidate)
             {
                 device->cache.stats.invalidations++;
                 line->tag_addr = INVALID_TAG;
+            }
+            else
+            {
+                /* implies this wasn't in response to a write instruction, so there may be other sharers
+                 * in the children of this cache. */
+
+                for (i64 i = 0; i < device->num_children; i++)
+                {
+                    cache_read_back_invisible_recursive(device->children[i], paddr);
+                }
             }
         }
     }
