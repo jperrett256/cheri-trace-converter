@@ -768,6 +768,36 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
             assert(start_addr_cap % CAP_SIZE_BYTES == 0);
             assert(end_addr_cap % CAP_SIZE_BYTES == 0);
 
+            switch (current_entry.type)
+            {
+                // TODO there will be a need to flush even unmodified cache lines (with write_back_invisible)
+                case CUSTOM_TRACE_TYPE_INSTR:
+                {
+                    /* to successfully read this data, we need to make sure no peer cache has a
+                     * modified version of this cache line */
+
+                    notify_peers_coherence_flush(l1_instr_cache, paddr, false);
+                } break;
+                case CUSTOM_TRACE_TYPE_LOAD:
+                case CUSTOM_TRACE_TYPE_CLOAD:
+                {
+                    /* to successfully read this data, we need to make sure no peer cache has a
+                     * modified version of this cache line */
+
+                    notify_peers_coherence_flush(l1_data_cache, paddr, false);
+                } break;
+                case CUSTOM_TRACE_TYPE_STORE:
+                case CUSTOM_TRACE_TYPE_CSTORE:
+                {
+                    /* to successfully write this data, we need to make sure no peer cache has this
+                     * cache line (otherwise stale data could be read from the peer cache later on) */
+
+                    notify_peers_coherence_flush(l1_data_cache, paddr, true);
+
+                } break;
+                default: assert("Impossible.");
+            }
+
             if (current_entry.type == CUSTOM_TRACE_TYPE_INSTR)
             {
                 cache_line_t * cache_line = cache_request(l1_instr_cache, paddr);

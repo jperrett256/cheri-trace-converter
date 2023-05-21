@@ -419,8 +419,6 @@ static inline i64 cache_find_existing(device_t * device, u64 tag_addr, u32 * set
 
 // TODO optional logging?
 
-// TODO struct for tags_cheri and tags_known?
-
 static void cache_write_back(device_t * device, u64 paddr, tags_t tags_cheri)
 {
     assert(device->type == DEVICE_TYPE_CACHE);
@@ -646,6 +644,82 @@ cache_line_t * cache_request(device_t * device, u64 paddr)
     return result;
 }
 
+
+static i64 coherence_flush(device_t * device, u64 paddr, bool should_invalidate)
+{
+    assert(device->type == DEVICE_TYPE_CACHE);
+
+    i64 num_modified = 0;
+    for (i64 i = 0; i < device->num_children; i++)
+    {
+        device_t * child = device->children[i];
+        num_modified += coherence_flush(child, paddr, should_invalidate);
+    }
+    assert(num_modified <= 1);
+
+    u64 tag_addr = paddr >> CACHE_LINE_SIZE_BITS;
+    u32 set_start_idx;
+    i64 way = cache_find_existing(device, tag_addr, &set_start_idx);
+
+    bool write_back_done = false;
+
+    if (way >= 0)
+    {
+        cache_line_t * result = &device->cache.entries[set_start_idx + way];
+        if (result->tag_addr != INVALID_TAG)
+        {
+            if (result->dirty)
+            {
+                device->cache.stats.write_backs++;
+                cache_write_back(device->parent, paddr, result->tags_cheri);
+
+                result->dirty = false;
+
+                write_back_done = true;
+            }
+            else
+            {
+                cache_write_back_invisible(device->parent, paddr, result->tags_cheri);
+            }
+
+            if (should_invalidate)
+            {
+                device->cache.stats.invalidations++;
+                result->tag_addr = INVALID_TAG;
+            }
+        }
+    }
+
+    return write_back_done;
+}
+
+void notify_peers_coherence_flush(device_t * device, u64 paddr, bool should_invalidate)
+{
+    assert(device->type == DEVICE_TYPE_CACHE);
+
+    /* NOTE by peer caches, we actually mean all caches not on the path down to memory.
+     * e.g. if you are about to access L1D on core 0, you need to flush L1I on core 0,
+     * as well as all the caches on all the other processors! */
+
+    if (device->parent)
+    {
+        device_t * parent = device->parent;
+
+        for (i64 i = 0; i < parent->num_children; i++)
+        {
+            device_t * child = parent->children[i];
+            if (child != device && child->type == DEVICE_TYPE_CACHE)
+            {
+                coherence_flush(child, paddr, should_invalidate);
+            }
+        }
+
+        if (parent->type == DEVICE_TYPE_CACHE)
+        {
+            notify_peers_coherence_flush(parent, paddr, should_invalidate);
+        }
+    }
+}
 
 static char * device_get_name(device_t * device)
 {

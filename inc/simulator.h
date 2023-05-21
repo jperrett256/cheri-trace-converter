@@ -136,6 +136,8 @@ device_t * controller_interface_init(arena_t * arena, char * output_filename);
 void device_write(device_t * device, u64 paddr, tags_t tags_cheri);
 tags_t device_read(device_t * device, u64 paddr);
 
+void notify_peers_coherence_flush(device_t * device, u64 paddr, bool should_invalidate);
+
 void device_print_configuration(device_t * device);
 void device_print_statistics(device_t * device);
 void device_cleanup(device_t * device);
