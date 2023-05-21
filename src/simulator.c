@@ -463,6 +463,46 @@ static void cache_write_back_invisible(device_t * device, u64 paddr, tags_t tags
     result->tags_cheri = tags_cheri;
 }
 
+static void cache_read_back_invisible(device_t * device, u64 paddr)
+{
+    assert(device->type == DEVICE_TYPE_CACHE);
+    assert(paddr % CACHE_LINE_SIZE == 0);
+
+    device_t * parent = device->parent;
+    assert(parent && parent->type == DEVICE_TYPE_CACHE);
+
+    u64 tag_addr = paddr >> CACHE_LINE_SIZE_BITS;
+
+    tags_t parent_tags;
+    {
+        u32 set_start_idx;
+        i64 way = cache_find_existing(parent, tag_addr, &set_start_idx);
+
+        if (way < 0) return;
+
+        cache_line_t * parent_line = &parent->cache.entries[set_start_idx + way];
+        parent_tags = parent_line->tags_cheri;
+
+        /* NOTE the parent line may be dirty (indicating it is modified with respect to its parent). */
+    }
+
+    {
+        u32 set_start_idx;
+        i64 way = cache_find_existing(device, tag_addr, &set_start_idx);
+        if (way >= 0)
+        {
+            cache_line_t * line = &device->cache.entries[set_start_idx + way];
+
+            /* NOTE this function is only called if a line is shared between peer caches,
+               which necessarily means that they are unmodified (with respect to the shared parent). */
+            assert(line->dirty == false);
+
+            check_update_unknown_tags(line->tags_cheri, parent_tags);
+            line->tags_cheri = parent_tags;
+        }
+    }
+}
+
 cache_line_t * cache_request(device_t * device, u64 paddr)
 {
     assert(device->type == DEVICE_TYPE_CACHE);
@@ -645,55 +685,97 @@ cache_line_t * cache_request(device_t * device, u64 paddr)
 }
 
 
-static i64 coherence_flush(device_t * device, u64 paddr, bool should_invalidate)
+enum coherence_search_result_t
+{
+    COHERENCE_SEARCH_NOT_FOUND,
+    COHERENCE_SEARCH_FOUND_CLEAN,
+    COHERENCE_SEARCH_FOUND_MODIFIED
+};
+
+static inline void update_coherence_search_state(i8 search_result, bool * found_clean, bool * found_modified)
+{
+    assert(search_result != -1);
+    if (search_result == COHERENCE_SEARCH_FOUND_CLEAN)
+    {
+        // if we find an unmodified line, no one else can have a modified version
+        assert(!*found_modified);
+
+        *found_clean = true;
+    }
+    if (search_result == COHERENCE_SEARCH_FOUND_MODIFIED)
+    {
+        // if we have a modified line, no one else can have it at all (modified or clean)
+        assert(!*found_modified);
+        assert(!*found_clean);
+
+        *found_modified = true;
+    }
+}
+
+static i8 coherence_flush(device_t * device, u64 paddr, bool should_invalidate)
 {
     assert(device->type == DEVICE_TYPE_CACHE);
 
-    i64 num_modified = 0;
+    bool found_clean_in_children = false;
+    bool found_modified_in_child = false;
     for (i64 i = 0; i < device->num_children; i++)
     {
         device_t * child = device->children[i];
-        num_modified += coherence_flush(child, paddr, should_invalidate);
+        i8 child_result = coherence_flush(child, paddr, should_invalidate);
+
+        update_coherence_search_state(child_result,
+            &found_clean_in_children, &found_modified_in_child);
     }
-    assert(num_modified <= 1);
 
     u64 tag_addr = paddr >> CACHE_LINE_SIZE_BITS;
     u32 set_start_idx;
     i64 way = cache_find_existing(device, tag_addr, &set_start_idx);
 
-    bool write_back_done = false;
+    i8 result = -1;
 
     if (way >= 0)
     {
-        cache_line_t * result = &device->cache.entries[set_start_idx + way];
-        if (result->tag_addr != INVALID_TAG)
+        cache_line_t * line = &device->cache.entries[set_start_idx + way];
+        if (line->tag_addr != INVALID_TAG)
         {
-            if (result->dirty)
+            if (line->dirty)
             {
                 device->cache.stats.write_backs++;
-                cache_write_back(device->parent, paddr, result->tags_cheri);
+                cache_write_back(device->parent, paddr, line->tags_cheri);
 
-                result->dirty = false;
+                line->dirty = false;
 
-                write_back_done = true;
+                result = COHERENCE_SEARCH_FOUND_MODIFIED;
             }
             else
             {
-                cache_write_back_invisible(device->parent, paddr, result->tags_cheri);
+                cache_write_back_invisible(device->parent, paddr, line->tags_cheri);
+
+                result = COHERENCE_SEARCH_FOUND_CLEAN;
+
+                assert(!found_modified_in_child);
             }
 
             if (should_invalidate)
             {
                 device->cache.stats.invalidations++;
-                result->tag_addr = INVALID_TAG;
+                line->tag_addr = INVALID_TAG;
             }
         }
     }
+    else
+    {
+        result = COHERENCE_SEARCH_NOT_FOUND;
 
-    return write_back_done;
+        // inclusivity: if we didn't find it here, we didn't find it in the children caches
+        assert(!found_modified_in_child && !found_clean_in_children);
+    }
+
+    assert(result != -1);
+    return result;
 }
 
-void notify_peers_coherence_flush(device_t * device, u64 paddr, bool should_invalidate)
+i8 notify_peers_coherence_flush(device_t * device, u64 paddr, bool should_invalidate)
 {
     assert(device->type == DEVICE_TYPE_CACHE);
 
@@ -701,24 +783,52 @@ void notify_peers_coherence_flush(device_t * device, u64 paddr, bool should_inva
      * e.g. if you are about to access L1D on core 0, you need to flush L1I on core 0,
      * as well as all the caches on all the other processors! */
 
+    bool found_clean_in_peers = false;
+    bool found_modified_in_peer = false;
     if (device->parent)
     {
         device_t * parent = device->parent;
 
-        for (i64 i = 0; i < parent->num_children; i++)
-        {
-            device_t * child = parent->children[i];
-            if (child != device && child->type == DEVICE_TYPE_CACHE)
-            {
-                coherence_flush(child, paddr, should_invalidate);
-            }
-        }
-
         if (parent->type == DEVICE_TYPE_CACHE)
         {
-            notify_peers_coherence_flush(parent, paddr, should_invalidate);
+            {
+                i8 search_result = notify_peers_coherence_flush(parent, paddr, should_invalidate);
+
+                update_coherence_search_state(search_result,
+                    &found_clean_in_peers, &found_modified_in_peer);
+            }
+
+            for (i64 i = 0; i < parent->num_children; i++)
+            {
+                device_t * child = parent->children[i];
+
+                if (child != device && child->type == DEVICE_TYPE_CACHE)
+                {
+                    i8 search_result = coherence_flush(child, paddr, should_invalidate);
+
+                    update_coherence_search_state(search_result,
+                        &found_clean_in_peers, &found_modified_in_peer);
+                }
+            }
+        }
+        else
+        {
+            // NOTE assuming we have a single LLC
+            assert(parent->num_children == 1);
         }
     }
+
+    assert(!found_clean_in_peers || !found_modified_in_peer);
+
+    i8 result = found_modified_in_peer ? COHERENCE_SEARCH_FOUND_MODIFIED :
+        found_clean_in_peers ? COHERENCE_SEARCH_FOUND_CLEAN : COHERENCE_SEARCH_NOT_FOUND;
+
+    if (result != COHERENCE_SEARCH_NOT_FOUND)
+    {
+        cache_read_back_invisible(device, paddr);
+    }
+
+    return result;
 }
 
 static char * device_get_name(device_t * device)
