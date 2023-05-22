@@ -269,35 +269,13 @@ static void tag_cache_record_access(device_t * device, u64 paddr)
     assert(result->counter == 0);
 }
 
-static tags_t merge_unknown_tags(tags_t old_tags, tags_t new_tags)
+static void check_update_unknown_tags(tags_t old_tags, tags_t new_tags)
 {
     assert((old_tags.data & ~(old_tags.known)) == 0);
     assert((new_tags.data & ~(new_tags.known)) == 0);
 
-    if ((old_tags.known | new_tags.known) == new_tags.known) /* is superset (common case) */
-    {
-        assert((old_tags.data & old_tags.known) == (new_tags.data & old_tags.known)); // known data bits unchanged
-        return new_tags;
-    }
-    else
-    {
-        /* NOTE this should only ever occur if the same cache line is accessed from two caches. */
-
-        tags_t merged_tags = {0};
-        merged_tags.known = (old_tags.known | new_tags.known);
-
-        b8 intersection = (old_tags.known & new_tags.known);
-        assert((old_tags.data & intersection) == (new_tags.data & intersection)); // known data bits unchanged
-
-        merged_tags.data = old_tags.data | old_tags.data;
-        assert(merged_tags.data == ((old_tags.data & (old_tags.known & ~intersection)) |
-                (new_tags.data & (new_tags.known & ~intersection)) | (old_tags.data & intersection)));
-
-        printf("MERGING UNKNOWN TAGS [ old: ( %02X & %02X ), new: ( %02X & %02X ), merged: ( %02X & %02X )\n",
-            old_tags.data, old_tags.known, new_tags.data, new_tags.known, merged_tags.data, merged_tags.known);
-
-        return merged_tags;
-    }
+    assert((old_tags.known | new_tags.known) == new_tags.known); // check is superset
+    assert((old_tags.data & old_tags.known) == (new_tags.data & old_tags.known)); // known data bits unchanged
 }
 
 void device_write(device_t * device, u64 paddr, tags_t tags_cheri)
@@ -338,7 +316,7 @@ void device_write_invisible(device_t * device, u64 paddr, tags_t tags_cheri)
         case DEVICE_TYPE_CONTROLLER_INTERFACE:
         {
             tags_t prev_tags_cheri = tag_table_read(device->controller_interface.tag_table, paddr);
-            tags_cheri = merge_unknown_tags(prev_tags_cheri, tags_cheri);
+            check_update_unknown_tags(prev_tags_cheri, tags_cheri);
 
             tag_table_write(device->controller_interface.tag_table, paddr, tags_cheri);
         } break;
@@ -481,7 +459,7 @@ static void cache_write_back_invisible(device_t * device, u64 paddr, tags_t tags
     assert(result->tag_addr != INVALID_TAG);
     assert(result->tag_addr == tag_addr);
 
-    tags_cheri = merge_unknown_tags(result->tags_cheri, tags_cheri);
+    check_update_unknown_tags(result->tags_cheri, tags_cheri);
     result->tags_cheri = tags_cheri;
 }
 
@@ -667,13 +645,6 @@ cache_line_t * cache_request(device_t * device, u64 paddr)
 }
 
 
-enum coherence_search_result_t
-{
-    COHERENCE_SEARCH_NOT_FOUND,
-    COHERENCE_SEARCH_FOUND_CLEAN,
-    COHERENCE_SEARCH_FOUND_MODIFIED
-};
-
 static inline void update_coherence_search_state(i8 search_result, bool * found_clean, bool * found_modified)
 {
     assert(search_result != -1);
@@ -731,10 +702,12 @@ static i8 coherence_flush(device_t * device, u64 paddr, bool should_invalidate)
             }
             else
             {
-                /* NOTE by doing this regardless of whether or not this line is being invalidated,
-                 * we ensure the known bits of all other sharers will be made available in the
-                 * lowest common parent of all sharers. TODO not sure if super useful though? */
-
+                /* NOTE We perform these invisible write backs even when the cache line is
+                 * not being invalidated. This is because we want to make sure that, on the
+                 * first time that a cache line is read from a new cache (becomes a new
+                 * sharer), it is able to read in the most up-to-date tag state. We do this
+                 * by flushing it all the way down onto the path between the LLC and the
+                 * cache being accessed, so that it is found during the cache request. */
                 cache_write_back_invisible(device->parent, paddr, line->tags_cheri);
 
                 result = COHERENCE_SEARCH_FOUND_CLEAN;
@@ -761,7 +734,7 @@ static i8 coherence_flush(device_t * device, u64 paddr, bool should_invalidate)
     return result;
 }
 
-i8 notify_peers_coherence_flush(device_t * device, u64 paddr, bool should_invalidate)
+coherence_search_t notify_peers_coherence_flush(device_t * device, u64 paddr, bool should_invalidate)
 {
     assert(device->type == DEVICE_TYPE_CACHE);
 
@@ -771,6 +744,8 @@ i8 notify_peers_coherence_flush(device_t * device, u64 paddr, bool should_invali
 
     bool found_clean_in_peers = false;
     bool found_modified_in_peer = false;
+
+    device_t * lowest_common_parent = NULL;
     if (device->parent)
     {
         device_t * parent = device->parent;
@@ -778,23 +753,31 @@ i8 notify_peers_coherence_flush(device_t * device, u64 paddr, bool should_invali
         if (parent->type == DEVICE_TYPE_CACHE)
         {
             {
-                i8 search_result = notify_peers_coherence_flush(parent, paddr, should_invalidate);
+                coherence_search_t search_result =
+                    notify_peers_coherence_flush(parent, paddr, should_invalidate);
 
-                update_coherence_search_state(search_result,
+                update_coherence_search_state(search_result.status,
                     &found_clean_in_peers, &found_modified_in_peer);
+
+                lowest_common_parent = search_result.lowest_common_parent;
             }
 
             for (i64 i = 0; i < parent->num_children; i++)
             {
                 device_t * child = parent->children[i];
 
-                if (child != device && child->type == DEVICE_TYPE_CACHE)
+                if (child != device)
                 {
                     i8 search_result = coherence_flush(child, paddr, should_invalidate);
 
                     update_coherence_search_state(search_result,
                         &found_clean_in_peers, &found_modified_in_peer);
                 }
+            }
+
+            if (lowest_common_parent == NULL && (found_clean_in_peers || found_modified_in_peer))
+            {
+                lowest_common_parent = parent;
             }
         }
         else
@@ -806,8 +789,67 @@ i8 notify_peers_coherence_flush(device_t * device, u64 paddr, bool should_invali
 
     assert(!found_clean_in_peers || !found_modified_in_peer);
 
-    return found_modified_in_peer ? COHERENCE_SEARCH_FOUND_MODIFIED :
+    coherence_search_t result = {0};
+
+    result.status = found_modified_in_peer ? COHERENCE_SEARCH_FOUND_MODIFIED :
         found_clean_in_peers ? COHERENCE_SEARCH_FOUND_CLEAN : COHERENCE_SEARCH_NOT_FOUND;
+
+    result.lowest_common_parent = lowest_common_parent;
+
+    return result;
+}
+
+static void propagate_known_tags_in_children(device_t * device, u64 paddr, tags_t tags_cheri)
+{
+    assert(device->type == DEVICE_TYPE_CACHE);
+    assert(paddr % CACHE_LINE_SIZE == 0);
+
+    u64 tag_addr = paddr >> CACHE_LINE_SIZE_BITS;
+    u32 set_start_idx;
+    i64 way = cache_find_existing(device, tag_addr, &set_start_idx);
+
+    if (way >= 0)
+    {
+        cache_line_t * line = &device->cache.entries[set_start_idx + way];
+
+        /* NOTE this function is only called if a line is shared, which necessarily means
+           that they are unmodified (with respect to the lowest common parent). */
+        assert(line->dirty == false);
+
+        check_update_unknown_tags(line->tags_cheri, tags_cheri);
+        line->tags_cheri = tags_cheri;
+
+        for (i64 i = 0; i < device->num_children; i++)
+        {
+            device_t * child = device->children[i];
+            propagate_known_tags_in_children(child, paddr, tags_cheri);
+        }
+    }
+    /* NOTE since the caches here are inclusive, if we don't find it in this cache,
+     * there is no need to propagate the known tags up to the children. */
+}
+
+void coherence_propagate_known_tags(device_t * device, device_t * lowest_common_parent, u64 paddr, tags_t tags_cheri)
+{
+    assert(device->type == DEVICE_TYPE_CACHE);
+
+    device_t * parent = device->parent;
+    if (parent && parent->type == DEVICE_TYPE_CACHE)
+    {
+        cache_write_back_invisible(parent, paddr, tags_cheri);
+
+        for (i64 i = 0; i < parent->num_children; i++)
+        {
+            device_t * sibling = parent->children[i];
+            if (sibling != device)
+            {
+                propagate_known_tags_in_children(sibling, paddr, tags_cheri);
+            }
+        }
+
+        if (parent != lowest_common_parent)
+            coherence_propagate_known_tags(parent, lowest_common_parent, paddr, tags_cheri);
+    }
 }
 
 static char * device_get_name(device_t * device)

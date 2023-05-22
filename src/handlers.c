@@ -768,6 +768,9 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
             assert(start_addr_cap % CAP_SIZE_BYTES == 0);
             assert(end_addr_cap % CAP_SIZE_BYTES == 0);
 
+
+            /* HANDLE COHERENCE */
+            coherence_search_t coherence_search = { .status = -1 };
             switch (current_entry.type)
             {
                 // TODO there will be a need to flush even unmodified cache lines (with write_back_invisible)
@@ -776,7 +779,8 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
                     /* to successfully read this data, we need to make sure no peer cache has a
                      * modified version of this cache line */
 
-                    notify_peers_coherence_flush(l1_instr_cache, paddr, false);
+                    coherence_search =
+                        notify_peers_coherence_flush(l1_instr_cache, paddr, false);
                 } break;
                 case CUSTOM_TRACE_TYPE_LOAD:
                 case CUSTOM_TRACE_TYPE_CLOAD:
@@ -784,7 +788,8 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
                     /* to successfully read this data, we need to make sure no peer cache has a
                      * modified version of this cache line */
 
-                    notify_peers_coherence_flush(l1_data_cache, paddr, false);
+                    coherence_search =
+                        notify_peers_coherence_flush(l1_data_cache, paddr, false);
                 } break;
                 case CUSTOM_TRACE_TYPE_STORE:
                 case CUSTOM_TRACE_TYPE_CSTORE:
@@ -792,12 +797,15 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
                     /* to successfully write this data, we need to make sure no peer cache has this
                      * cache line (otherwise stale data could be read from the peer cache later on) */
 
-                    notify_peers_coherence_flush(l1_data_cache, paddr, true);
-
+                    coherence_search =
+                        notify_peers_coherence_flush(l1_data_cache, paddr, true);
                 } break;
                 default: assert("Impossible.");
             }
+            assert(coherence_search.status != -1);
 
+
+            /* HANDLE REQUEST */
             if (current_entry.type == CUSTOM_TRACE_TYPE_INSTR)
             {
                 cache_line_t * cache_line = cache_request(l1_instr_cache, paddr);
@@ -814,6 +822,14 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
 
                     assert((cache_line->tags_cheri.data & (1 << tag_idx)) == 0);
                     assert((cache_line->tags_cheri.known & (1 << tag_idx)) != 0);
+
+                    // if this is a shared cache line, propagate known tags to other entries
+                    if (coherence_search.status != COHERENCE_SEARCH_NOT_FOUND)
+                    {
+                        assert(!cache_line->dirty);
+                        coherence_propagate_known_tags(l1_instr_cache, coherence_search.lowest_common_parent,
+                            paddr, cache_line->tags_cheri);
+                    }
                 }
             }
             else
@@ -837,6 +853,14 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
 
                             assert(((cache_line->tags_cheri.data & (1 << tag_idx)) != 0) == current_entry.tag);
                             assert((cache_line->tags_cheri.known & (1 << tag_idx)) != 0);
+
+                            // if this is a shared cache line, propagate known tags to other entries
+                            if (coherence_search.status != COHERENCE_SEARCH_NOT_FOUND)
+                            {
+                                assert(!cache_line->dirty);
+                                coherence_propagate_known_tags(l1_data_cache, coherence_search.lowest_common_parent,
+                                    paddr, cache_line->tags_cheri);
+                            }
                         }
                     } break;
                     case CUSTOM_TRACE_TYPE_STORE:

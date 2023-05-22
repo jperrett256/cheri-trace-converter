@@ -136,10 +136,26 @@ device_t * controller_interface_init(arena_t * arena, char * output_filename);
 void device_write(device_t * device, u64 paddr, tags_t tags_cheri);
 tags_t device_read(device_t * device, u64 paddr);
 
-i8 notify_peers_coherence_flush(device_t * device, u64 paddr, bool should_invalidate);
-
 void device_print_configuration(device_t * device);
 void device_print_statistics(device_t * device);
 void device_cleanup(device_t * device);
+
+
+enum coherence_search_result_t
+{
+    COHERENCE_SEARCH_NOT_FOUND,
+    COHERENCE_SEARCH_FOUND_CLEAN,
+    COHERENCE_SEARCH_FOUND_MODIFIED
+};
+
+typedef struct coherence_search_t coherence_search_t;
+struct coherence_search_t
+{
+    i8 status;
+    device_t * lowest_common_parent;
+};
+
+coherence_search_t notify_peers_coherence_flush(device_t * device, u64 paddr, bool should_invalidate);
+void coherence_propagate_known_tags(device_t * device, device_t * lowest_common_parent, u64 paddr, tags_t tags_cheri);
 
 #endif /* SIMULATOR_INCLUDE */
