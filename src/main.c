@@ -56,6 +56,10 @@ int main(int argc, char * argv[])
             trace_convert_generic
         },
         {
+            string_lit("split"),
+            trace_split
+        },
+        {
             string_lit("convert-drcachesim-vaddr"),
             trace_convert_drcachesim_vaddr
         },

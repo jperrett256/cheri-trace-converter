@@ -9,6 +9,7 @@ void trace_get_info(COMMAND_HANDLER_ARGS);
 void trace_patch_paddrs(COMMAND_HANDLER_ARGS);
 void trace_convert(COMMAND_HANDLER_ARGS);
 void trace_convert_generic(COMMAND_HANDLER_ARGS);
+void trace_split(COMMAND_HANDLER_ARGS);
 void trace_convert_drcachesim_vaddr(COMMAND_HANDLER_ARGS);
 void trace_convert_drcachesim_paddr(COMMAND_HANDLER_ARGS);
 void trace_get_initial_accesses(COMMAND_HANDLER_ARGS);

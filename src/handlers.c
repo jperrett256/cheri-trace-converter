@@ -371,6 +371,51 @@ void trace_convert_generic(COMMAND_HANDLER_ARGS)
     trace_writer_close(&output_trace);
 }
 
+void trace_split(COMMAND_HANDLER_ARGS)
+{
+    if (num_args != 3)
+    {
+        printf("Usage: %s %s <trace input> <trace output1> <trace output2>\n", exe_name, cmd_name);
+        quit();
+    }
+
+    char * input_trace_filename = args[0];
+    char * output_trace_filename_a = args[1];
+    char * output_trace_filename_b = args[2];
+
+    if (file_exists_not_fifo(output_trace_filename_a))
+    {
+        if (!confirm_overwrite_file(output_trace_filename_a)) quit();
+    }
+
+    if (file_exists_not_fifo(output_trace_filename_b))
+    {
+        if (!confirm_overwrite_file(output_trace_filename_b)) quit();
+    }
+
+    trace_reader_t input_trace =
+        trace_reader_open(arena, input_trace_filename, guess_reader_type(input_trace_filename));
+
+    trace_writer_t output_trace_a =
+        trace_writer_open(arena, output_trace_filename_a, guess_writer_type(output_trace_filename_a));
+
+    trace_writer_t output_trace_b =
+        trace_writer_open(arena, output_trace_filename_b, guess_writer_type(output_trace_filename_b));
+
+    while (true)
+    {
+        custom_trace_entry_t current_entry;
+        if (!trace_reader_get(&input_trace, &current_entry, sizeof(current_entry))) break;
+
+        trace_writer_emit(&output_trace_a, &current_entry, sizeof(current_entry));
+        trace_writer_emit(&output_trace_b, &current_entry, sizeof(current_entry));
+    }
+
+    trace_reader_close(&input_trace);
+    trace_writer_close(&output_trace_a);
+    trace_writer_close(&output_trace_b);
+}
+
 // TODO move main loops here into drcachesim source file?
 void trace_convert_drcachesim_vaddr(COMMAND_HANDLER_ARGS)
 {
