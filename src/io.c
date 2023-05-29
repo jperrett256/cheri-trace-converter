@@ -1,3 +1,9 @@
+#define _GNU_SOURCE
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+
 #include "io.h"
 #include "utils.h"
 
@@ -32,11 +38,11 @@ static void memmove_down(void * dst, const void * src, i64 size)
 //     }
 // }
 
-static void lz4_reader_open(arena_t * arena, char * filename, lz4_reader_t * state)
+static void lz4_reader_open(arena_t * arena, int fd, lz4_reader_t * state)
 {
     // TODO create own arena instead?
 
-    state->file = fopen(filename, "rb");
+    state->file = fdopen(fd, "rb");
     assert(state->file);
 
     LZ4F_errorCode_t lz4_error = LZ4F_createDecompressionContext(&state->ctx, LZ4F_VERSION);
@@ -189,17 +195,46 @@ trace_reader_t trace_reader_open(arena_t * arena, char * filename, u8 type)
     trace_reader_t reader = {0};
     reader.type = type;
 
+    int fd = open(filename, O_RDONLY);
+    if (fd == -1)
+    {
+        fprintf(stderr, "Could not open file for reading: \"%s\".\n", filename);
+        quit();
+    }
+
+    {
+        int success;
+
+        struct stat buf;
+        success = fstat(fd, &buf);
+        assert(success != -1);
+
+        if (S_ISFIFO(buf.st_mode))
+        {
+            int pipe_size = fcntl(fd, F_GETPIPE_SZ);
+            assert(pipe_size != -1);
+
+            int desired_pipe_size = MEGABYTES(1);
+
+            fprintf(stderr, "Reading from Unix FIFO with buffer size %d, will resize buffer to %d.\n",
+                pipe_size, desired_pipe_size);
+
+            success = fcntl(fd, F_SETPIPE_SZ, desired_pipe_size);
+            assert(success != -1);
+        }
+    }
+
     switch (type)
     {
         case TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP:
         {
-            reader.as.gzip = gzopen(filename, "rb");
+            reader.as.gzip = gzdopen(fd, "rb");
             assert(reader.as.gzip);
             // TODO tune buffer size with gzbuffer? manual buffering?
         } break;
         case TRACE_READER_TYPE_LZ4:
         {
-            lz4_reader_open(arena, filename, &reader.as.lz4);
+            lz4_reader_open(arena, fd, &reader.as.lz4);
         } break;
         default: assert(!"Impossible");
     }
@@ -254,12 +289,10 @@ void trace_reader_close(trace_reader_t * reader)
 }
 
 
-void lz4_writer_open(arena_t * arena, char * filename, lz4_writer_t * state)
+void lz4_writer_open(arena_t * arena, int fd, lz4_writer_t * state)
 {
-    state->file = fopen(filename, "wb");
+    state->file = fdopen(fd, "wb");
     assert(state->file);
-
-    // TODO use different filename and rename on close, to ensure that failing to close is obvious
 
     LZ4F_errorCode_t lz4_error = LZ4F_createCompressionContext(&state->ctx, LZ4F_VERSION);
     assert(!LZ4F_isError(lz4_error));
@@ -380,22 +413,51 @@ trace_writer_t trace_writer_open(arena_t * arena, char * filename, u8 type)
     trace_writer_t writer = {0};
     writer.type = type;
 
+    int fd = open(filename, O_WRONLY|O_CREAT, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH);
+    if (fd == -1)
+    {
+        fprintf(stderr, "Could not open file for writing: \"%s\".\n", filename);
+        quit();
+    }
+
+    {
+        int success;
+
+        struct stat buf;
+        success = fstat(fd, &buf);
+        assert(success != -1);
+
+        if (S_ISFIFO(buf.st_mode))
+        {
+            int pipe_size = fcntl(fd, F_GETPIPE_SZ);
+            assert(pipe_size != -1);
+
+            int desired_pipe_size = MEGABYTES(1);
+
+            fprintf(stderr, "Writing to Unix FIFO with buffer size %d, will resize buffer to %d.\n",
+                pipe_size, desired_pipe_size);
+
+            success = fcntl(fd, F_SETPIPE_SZ, desired_pipe_size);
+            assert(success != -1);
+        }
+    }
+
     switch (type)
     {
         case TRACE_WRITER_TYPE_UNCOMPRESSED:
         {
-            writer.as.uncompressed = fopen(filename, "wb");
+            writer.as.uncompressed = fdopen(fd, "wb");
             assert(writer.as.uncompressed);
         } break;
         case TRACE_WRITER_TYPE_GZIP:
         {
-            writer.as.gzip = gzopen(filename, "wb");
+            writer.as.gzip = gzdopen(fd, "wb");
             assert(writer.as.gzip);
             // TODO tune buffer size with gzbuffer? manual buffering?
         } break;
         case TRACE_WRITER_TYPE_LZ4:
         {
-            lz4_writer_open(arena, filename, &writer.as.lz4);
+            lz4_writer_open(arena, fd, &writer.as.lz4);
         } break;
         default: assert(!"Impossible");
     }
