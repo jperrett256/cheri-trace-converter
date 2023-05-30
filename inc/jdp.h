@@ -30,6 +30,9 @@ typedef u32         b32;
 typedef float       f32;
 typedef double      f64;
 
+#define INDENT4     "    "
+#define INDENT8     INDENT4 INDENT4
+
 #define KILOBYTES(x)    ((x)*1024LL)
 #define MEGABYTES(x)    (KILOBYTES(x)*1024LL)
 #define GIGABYTES(x)    (MEGABYTES(x)*1024LL)

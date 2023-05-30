@@ -13,16 +13,23 @@ struct command_t
 {
     string_t name;
     void (*handler)(COMMAND_HANDLER_ARGS);
+    string_t description;
 };
 
 void print_commands_and_quit(char * exe_name, command_t * commands, u32 num_commands)
 {
     printf("Usage: %s <command> [<argument1> ...]\n", exe_name);
+    printf("\n");
     printf("Available commands:\n");
     for (i64 i = 0; i < num_commands; i++)
     {
-        printf("    %.*s\n", string_varg(commands[i].name));
+        printf(INDENT4 "%.*s\n", string_varg(commands[i].name));
+        printf(INDENT8 "%.*s\n", string_varg(commands[i].description));
     }
+
+    printf("\n");
+    printf("Run a command without any arguments for usage information.\n");
+    printf("\n");
     quit();
 }
 
@@ -40,44 +47,53 @@ int main(int argc, char * argv[])
     {
         {
             string_lit("get-info"),
-            trace_get_info
+            trace_get_info,
+            string_lit("Prints statistics about a trace.")
         },
         {
             string_lit("patch-paddrs"),
-            trace_patch_paddrs
-            // TODO if you wanna implement your own hashmap, checking the output of this with previous results would be a good way to test it
+            trace_patch_paddrs,
+            string_lit("Patching missing / invalid physical addresses using previous instructions.")
         },
         {
             string_lit("convert"),
-            trace_convert
+            trace_convert,
+            string_lit("Converts standard QEMU-CHERI traces from one compression type to another.")
         },
         {
             string_lit("convert-generic"),
-            trace_convert_generic
+            trace_convert_generic,
+            string_lit("Converts any file from one compression type to another (works for drcachesim / LLC outgoing request traces).")
         },
         {
             string_lit("split"),
-            trace_split
+            trace_split,
+            string_lit("Reads in an input trace and writes two out (somewhat like tee).")
         },
         {
             string_lit("convert-drcachesim-vaddr"),
-            trace_convert_drcachesim_vaddr
+            trace_convert_drcachesim_vaddr,
+            string_lit("Converts standard traces to the drcachesim trace format, containing virtual addresses with physical mapping entries.")
         },
         {
             string_lit("convert-drcachesim-paddr"),
-            trace_convert_drcachesim_paddr
+            trace_convert_drcachesim_paddr,
+            string_lit("Converts standard traces to the drcachesim trace format, containing only physical addresses (in the place of virtual ones).")
         },
         {
-            string_lit("get-initial-accesses"),
-            trace_get_initial_accesses
+            string_lit("get-initial-state"),
+            trace_get_initial_accesses,
+            string_lit("This creates a file indicating the first access type to every memory location (for reconstructing the initial tag state in memory).")
         },
         {
             string_lit("simulate"),
-            trace_simulate
+            trace_simulate,
+            string_lit("Simulates instruction and data caches, outputs the outgoing requests from the LLC.")
         },
         {
             string_lit("simulate-tag-cache"),
-            trace_simulate_uncompressed
+            trace_simulate_uncompressed,
+            string_lit("Simulates a tag cache without compression, given a trace of the outgoing requests from the LLC.")
         }
     };
 

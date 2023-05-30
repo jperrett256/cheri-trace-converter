@@ -196,6 +196,7 @@ void trace_get_info(COMMAND_HANDLER_ARGS)
 }
 
 
+// TODO if you want to implement your own hashmap, checking the output of this with previous results would be a good way to test it
 void trace_patch_paddrs(COMMAND_HANDLER_ARGS)
 {
     if (num_args != 2)
