@@ -99,9 +99,9 @@ static void write_drcachesim_tag_entry(trace_writer_t * writer, uint8_t type, ui
     if (type == CUSTOM_TRACE_TYPE_INSTR) assert(tag == 0);
     if (type == CUSTOM_TRACE_TYPE_STORE) assert(tag == 0);
 
-    if (type != CUSTOM_TRACE_TYPE_LOAD && type != CUSTOM_TRACE_TYPE_INSTR)
+    if (type == CUSTOM_TRACE_TYPE_CLOAD || type == CUSTOM_TRACE_TYPE_CSTORE)
     {
-        // don't know tag for LOADs, know tag is cleared for instructions
+        // don't know tag for LOADs, know tag is cleared for INSTRs/STOREs
 
         assert(tag == 0 || tag == 1);
 
