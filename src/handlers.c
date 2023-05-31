@@ -9,6 +9,7 @@
 #include "io.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <zlib.h>
 #include <inttypes.h>
 
@@ -1016,19 +1017,19 @@ void trace_simulate(COMMAND_HANDLER_ARGS)
 // TODO fix
 void trace_simulate_uncompressed(COMMAND_HANDLER_ARGS)
 {
-    if (num_args != 1)
+    if (num_args != 2)
     {
-        printf("Usage: %s %s <controller trace file>\n", exe_name, cmd_name);
+        printf("Usage: %s %s <LLC requests trace file> <initial state file>\n", exe_name, cmd_name);
         quit();
     }
 
-    char * input_trace_filename = args[0];
-    // char * initial_tags_filename = args[1];
+    char * requests_trace_filename = args[0];
+    // char * initial_state_filename = args[1];
 
     // device_t * tag_controller = tag_cache_init(arena, initial_tags_filename, KILOBYTES(32), 4);
 
-    trace_reader_t input_trace =
-        trace_reader_open(arena, input_trace_filename, TRACE_READER_TYPE_UNCOMPRESSED_OR_GZIP);
+    trace_reader_t tag_controller_requests =
+        trace_reader_open(arena, requests_trace_filename, guess_reader_type(requests_trace_filename));
 
     // printf("Simulating with following configuration:\n");
     // device_print_configuration(tag_controller);
@@ -1037,7 +1038,7 @@ void trace_simulate_uncompressed(COMMAND_HANDLER_ARGS)
     while (true)
     {
         tag_cache_request_t current_entry;
-        if (!trace_reader_get(&input_trace, &current_entry, sizeof(current_entry))) break;
+        if (!trace_reader_get(&tag_controller_requests, &current_entry, sizeof(current_entry))) break;
 
         assert(current_entry.size == CACHE_LINE_SIZE);
 
@@ -1078,5 +1079,375 @@ void trace_simulate_uncompressed(COMMAND_HANDLER_ARGS)
     // device_cleanup(tag_controller);
     // printf("\n");
 
-    trace_reader_close(&input_trace);
+    trace_reader_close(&tag_controller_requests);
+}
+
+
+typedef struct trace_requests_stats_t trace_requests_stats_t;
+struct trace_requests_stats_t
+{
+    set_u64 tagged_capabilities;
+    map_u64 page_tag_counts;
+    set_u64 accessed_pages;
+
+    u64 num_capabilities_tagged;
+    u64 num_lines_tagged;
+    u64 num_pages_tagged;
+};
+
+static trace_requests_stats_t requests_stats_create(void)
+{
+    trace_requests_stats_t stats = {0};
+
+    stats.tagged_capabilities = set_u64_create();
+    stats.page_tag_counts = map_u64_create();
+    stats.accessed_pages = set_u64_create();
+
+    return stats;
+}
+
+static void requests_stats_cleanup(trace_requests_stats_t * stats)
+{
+    set_u64_cleanup(&stats->tagged_capabilities);
+    map_u64_cleanup(&stats->page_tag_counts);
+    set_u64_cleanup(&stats->accessed_pages);
+}
+
+static void requests_stats_print(trace_requests_stats_t * stats)
+{
+    printf("Statistics:\n");
+    printf(INDENT4 "Number of capabilities with tag set: %lu\n", stats->num_capabilities_tagged);
+    printf(INDENT4 "Number of cache lines containing tags: %lu\n", stats->num_lines_tagged);
+    printf(INDENT4 "Number of pages containing tags: %lu\n", stats->num_pages_tagged);
+    printf(INDENT4 "Number of pages accessed: %lu\n", set_u64_size(stats->accessed_pages));
+}
+
+static void requests_stats_print_csv_header(void)
+{
+    printf("index,valid capabilities,cache lines containing tags,pages containing tags,pages accessed\n");
+}
+
+static void requests_stats_print_csv(u64 index, trace_requests_stats_t * stats)
+{
+    printf("%lu,%lu,%lu,%lu,%lu\n",
+        index,
+        stats->num_capabilities_tagged,
+        stats->num_lines_tagged,
+        stats->num_pages_tagged,
+        set_u64_size(stats->accessed_pages)
+    );
+}
+
+static void requests_stats_update_accessed_pages(trace_requests_stats_t * stats, u64 addr)
+{
+    set_u64_insert(stats->accessed_pages, get_page_start(addr));
+}
+
+static void requests_stats_update_tag(trace_requests_stats_t * stats, u64 addr, bool tag_set)
+{
+    bool tag_already_set = set_u64_contains(stats->tagged_capabilities, addr);
+
+    if (tag_set != tag_already_set)
+    {
+        if (tag_set)
+        {
+            assert(stats->num_capabilities_tagged < UINT64_MAX);
+            stats->num_capabilities_tagged++;
+
+            set_u64_insert(stats->tagged_capabilities, addr);
+        }
+        else
+        {
+            assert(stats->num_capabilities_tagged > 0);
+            stats->num_capabilities_tagged--;
+
+            set_u64_remove(stats->tagged_capabilities, addr);
+        }
+
+        u64 start_addr = align_floor_pow_2(addr, CACHE_LINE_SIZE);
+        u64 final_addr = align_ceil_pow_2(addr + CAP_SIZE_BYTES, CACHE_LINE_SIZE);
+
+        assert(final_addr > start_addr);
+        assert(final_addr - start_addr == CACHE_LINE_SIZE);
+
+        bool others_cleared_in_line = true;
+        for (u64 other_addr = start_addr; other_addr < final_addr; other_addr += CAP_SIZE_BYTES)
+        {
+            if (other_addr != addr)
+            {
+                if (set_u64_contains(stats->tagged_capabilities, other_addr))
+                {
+                    others_cleared_in_line = false;
+                    break;
+                }
+            }
+        }
+        if (others_cleared_in_line)
+        {
+            if (tag_set)
+            {
+                assert(stats->num_lines_tagged < UINT64_MAX);
+                stats->num_lines_tagged++;
+            }
+            else
+            {
+                assert(stats->num_lines_tagged > 0);
+                stats->num_lines_tagged--;
+            }
+        }
+
+        {
+            u64 page_addr = get_page_start(addr);
+            u64 num_tags_in_page;
+            if (!map_u64_get(stats->page_tag_counts, page_addr, &num_tags_in_page))
+            {
+                num_tags_in_page = 0;
+            }
+
+            if (num_tags_in_page == 0)
+            {
+                assert(tag_set);
+                assert(stats->num_pages_tagged < UINT64_MAX);
+                stats->num_pages_tagged++;
+            }
+
+            if (tag_set)
+            {
+                assert(num_tags_in_page < UINT64_MAX);
+                num_tags_in_page++;
+            }
+            else
+            {
+                assert(num_tags_in_page > 0);
+                num_tags_in_page--;
+            }
+
+            if (num_tags_in_page == 0)
+            {
+                assert(!tag_set);
+                assert(stats->num_pages_tagged > 0);
+                stats->num_pages_tagged--;
+            }
+
+            map_u64_set(stats->page_tag_counts, page_addr, num_tags_in_page);
+        }
+    }
+}
+
+static bool guess_initial_tag(initial_access_t initial_access)
+{
+    if (initial_access.type == CUSTOM_TRACE_TYPE_CLOAD || initial_access.type == CUSTOM_TRACE_TYPE_CSTORE)
+    {
+        if (initial_access.tag)
+        {
+            return true;
+        }
+    }
+
+    // memory accessed initially by LOADs, STOREs, INSTRs are assumed to not have tags before
+    return false;
+}
+
+void trace_requests_get_info(COMMAND_HANDLER_ARGS)
+{
+    if (num_args != 2)
+    {
+        printf("Usage: %s %s <LLC requests trace file> <initial state file>\n", exe_name, cmd_name);
+        quit();
+    }
+
+    char * requests_trace_filename = args[0];
+    char * initial_state_filename = args[1];
+
+    trace_reader_t tag_controller_requests =
+        trace_reader_open(arena, requests_trace_filename, guess_reader_type(requests_trace_filename));
+
+    FILE * initial_state_file = fopen(initial_state_filename, "rb");
+
+    trace_requests_stats_t stats = requests_stats_create();
+
+    i64 initial_state_table_size = MEMORY_SIZE / CAP_SIZE_BYTES;
+    initial_access_t * initial_state_table = arena_push_array(arena, initial_access_t, initial_state_table_size);
+    for (i64 i = 0; i < initial_state_table_size; i++)
+    {
+        initial_access_t current;
+        size_t bytes_read = fread(&current, sizeof(current), 1, initial_state_file);
+        assert(bytes_read == sizeof(current));
+
+        initial_state_table[i] = current;
+
+        u64 paddr = i * CAP_SIZE_BYTES + BASE_PADDR;
+        assert(check_paddr_valid(paddr));
+
+        requests_stats_update_tag(&stats, paddr, guess_initial_tag(current));
+    }
+
+    requests_stats_print(&stats);
+
+    // TODO more stats
+    u64 total_entries = 0;
+
+    while (true)
+    {
+        tag_cache_request_t current_entry;
+        if (!trace_reader_get(&tag_controller_requests, &current_entry, sizeof(current_entry))) break;
+
+        total_entries++;
+
+        u64 line_size = current_entry.size;
+        assert(line_size % CAP_SIZE_BYTES == 0);
+        assert(line_size == CACHE_LINE_SIZE); // TODO error instead
+
+        u64 start_paddr = current_entry.addr;
+        u64 final_paddr = current_entry.addr + line_size;
+
+        assert(start_paddr % CAP_SIZE_BYTES == 0);
+        assert(final_paddr % CAP_SIZE_BYTES == 0);
+        assert(final_paddr > start_paddr);
+
+        uint16_t i = 0;
+        for (u64 paddr = start_paddr; paddr < final_paddr; paddr += CAP_SIZE_BYTES, i++)
+        {
+            assert(i < UINT16_MAX);
+            assert(i < line_size / CAP_SIZE_BYTES);
+
+            assert(check_paddr_valid(paddr));
+
+            bool tag_set;
+            if (((1 << i) & current_entry.tags_known) != 0)
+            {
+                tag_set = ((1 << i) & current_entry.tags) != 0;
+            }
+            else
+            {
+                u64 mem_offset = paddr - BASE_PADDR;
+                assert(mem_offset % CAP_SIZE_BYTES == 0);
+                i64 table_idx = mem_offset / CAP_SIZE_BYTES;
+                assert(table_idx >= 0 && table_idx < initial_state_table_size);
+
+                tag_set = guess_initial_tag(initial_state_table[table_idx]);
+            }
+            requests_stats_update_accessed_pages(&stats, paddr);
+            requests_stats_update_tag(&stats, paddr, tag_set);
+        }
+    }
+
+    printf("\n");
+
+    requests_stats_print(&stats);
+
+    printf("\n");
+
+    printf("Total entries: %lu\n", total_entries);
+
+    trace_reader_close(&tag_controller_requests);
+    requests_stats_cleanup(&stats);
+}
+
+void trace_requests_make_tag_csv(COMMAND_HANDLER_ARGS)
+{
+    if (num_args != 3)
+    {
+        printf("Usage: %s %s <LLC requests trace file> <initial state file> <interval between entries>\n", exe_name, cmd_name);
+        quit();
+    }
+
+    char * requests_trace_filename = args[0];
+    char * initial_state_filename = args[1];
+    char * print_interval_str = args[2];
+
+    i64 print_interval;
+    {
+        char * endptr;
+        print_interval = strtoll(print_interval_str, &endptr, 10);
+        assert(endptr && *endptr == '\0');
+    }
+    assert(print_interval >= 1);
+
+    trace_reader_t tag_controller_requests =
+        trace_reader_open(arena, requests_trace_filename, guess_reader_type(requests_trace_filename));
+
+    FILE * initial_state_file = fopen(initial_state_filename, "rb");
+
+    trace_requests_stats_t stats = requests_stats_create();
+
+    i64 initial_state_table_size = MEMORY_SIZE / CAP_SIZE_BYTES;
+    initial_access_t * initial_state_table = arena_push_array(arena, initial_access_t, initial_state_table_size);
+    for (i64 i = 0; i < initial_state_table_size; i++)
+    {
+        initial_access_t current;
+        size_t bytes_read = fread(&current, sizeof(current), 1, initial_state_file);
+        assert(bytes_read == sizeof(current));
+
+        initial_state_table[i] = current;
+
+        u64 paddr = i * CAP_SIZE_BYTES + BASE_PADDR;
+        assert(check_paddr_valid(paddr));
+
+        requests_stats_update_tag(&stats, paddr, guess_initial_tag(current));
+    }
+
+    i64 interval_counter = 0;
+    requests_stats_print_csv_header();
+
+    u64 entry_index = 0;
+
+    while (true)
+    {
+        tag_cache_request_t current_entry;
+        if (!trace_reader_get(&tag_controller_requests, &current_entry, sizeof(current_entry))) break;
+
+        u64 line_size = current_entry.size;
+        assert(line_size % CAP_SIZE_BYTES == 0);
+        assert(line_size == CACHE_LINE_SIZE); // TODO error instead
+
+        u64 start_paddr = current_entry.addr;
+        u64 final_paddr = current_entry.addr + line_size;
+
+        assert(start_paddr % CAP_SIZE_BYTES == 0);
+        assert(final_paddr % CAP_SIZE_BYTES == 0);
+        assert(final_paddr > start_paddr);
+
+        uint16_t i = 0;
+        for (u64 paddr = start_paddr; paddr < final_paddr; paddr += CAP_SIZE_BYTES, i++)
+        {
+            assert(i < UINT16_MAX);
+            assert(i < line_size / CAP_SIZE_BYTES);
+
+            assert(check_paddr_valid(paddr));
+
+            bool tag_set;
+            if (((1 << i) & current_entry.tags_known) != 0)
+            {
+                tag_set = ((1 << i) & current_entry.tags) != 0;
+            }
+            else
+            {
+                u64 mem_offset = paddr - BASE_PADDR;
+                assert(mem_offset % CAP_SIZE_BYTES == 0);
+                i64 table_idx = mem_offset / CAP_SIZE_BYTES;
+                assert(table_idx >= 0 && table_idx < initial_state_table_size);
+
+                tag_set = guess_initial_tag(initial_state_table[table_idx]);
+            }
+            requests_stats_update_accessed_pages(&stats, paddr);
+            requests_stats_update_tag(&stats, paddr, tag_set);
+        }
+
+        if (interval_counter == 0)
+        {
+            requests_stats_print_csv(entry_index, &stats);
+        }
+        assert(interval_counter < INT64_MAX);
+        interval_counter++;
+        if (interval_counter >= print_interval)
+            interval_counter = 0;
+
+        entry_index++;
+    }
+
+    requests_stats_print_csv(entry_index, &stats);
+
+    trace_reader_close(&tag_controller_requests);
+    requests_stats_cleanup(&stats);
 }

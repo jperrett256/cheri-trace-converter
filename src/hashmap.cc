@@ -69,6 +69,13 @@ void set_u64_insert(set_u64 set, u64 key)
 	set_ptr->insert(key);
 }
 
+void set_u64_remove(set_u64 set, u64 key)
+{
+	assert(set.ptr);
+	std::unordered_set<u64> * set_ptr = (std::unordered_set<u64> *) set.ptr;
+	set_ptr->erase(key);
+}
+
 bool set_u64_contains(set_u64 set, u64 key)
 {
 	assert(set.ptr);

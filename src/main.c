@@ -94,6 +94,16 @@ int main(int argc, char * argv[])
             string_lit("simulate-tag-cache"),
             trace_simulate_uncompressed,
             string_lit("Simulates a tag cache without compression, given a trace of the outgoing requests from the LLC.")
+        },
+        {
+            string_lit("requests-get-info"),
+            trace_requests_get_info,
+            string_lit("Displays information about a file containing outgoing requests from the LLC.")
+        },
+        {
+            string_lit("requests-tag-csv"),
+            trace_requests_make_tag_csv,
+            string_lit("Reads in an LLC outgoing requests trace, outputs to stdout (in CSV form) information about how tags change over time.")
         }
     };
 

@@ -15,5 +15,7 @@ void trace_convert_drcachesim_paddr(COMMAND_HANDLER_ARGS);
 void trace_get_initial_accesses(COMMAND_HANDLER_ARGS);
 void trace_simulate(COMMAND_HANDLER_ARGS);
 void trace_simulate_uncompressed(COMMAND_HANDLER_ARGS);
+void trace_requests_get_info(COMMAND_HANDLER_ARGS);
+void trace_requests_make_tag_csv(COMMAND_HANDLER_ARGS);
 
 #endif /* HANDLERS_INCLUDE */
