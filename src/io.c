@@ -40,8 +40,6 @@ static void memmove_down(void * dst, const void * src, i64 size)
 
 static void lz4_reader_open(arena_t * arena, int fd, lz4_reader_t * state)
 {
-    // TODO create own arena instead?
-
     state->file = fdopen(fd, "rb");
     assert(state->file);
 
@@ -49,7 +47,6 @@ static void lz4_reader_open(arena_t * arena, int fd, lz4_reader_t * state)
     assert(!LZ4F_isError(lz4_error));
 
     state->src_buf = arena_push_array(arena, u8, LZ4_BUFFER_SIZE);
-    // TODO test just using current_entry as the destination buffer
     state->dst_buf = arena_push_array(arena, u8, LZ4_BUFFER_SIZE);
     state->src_current = state->src_buf;
     state->dst_current = state->dst_buf;
@@ -297,7 +294,7 @@ void lz4_writer_open(arena_t * arena, int fd, lz4_writer_t * state)
     LZ4F_errorCode_t lz4_error = LZ4F_createCompressionContext(&state->ctx, LZ4F_VERSION);
     assert(!LZ4F_isError(lz4_error));
 
-    LZ4F_preferences_t lz4_prefs = // TODO
+    LZ4F_preferences_t lz4_prefs =
     {
         {
             LZ4F_max4MB,
@@ -346,7 +343,6 @@ void lz4_writer_emit_entry(lz4_writer_t * state, const void * entry, size_t entr
     assert(state->file);
     assert(entry_size <= LZ4_BUFFER_SIZE);
 
-    // TODO what happens if you just call compressUpdate with the entry (no src buffer)?
     if (state->src_size + entry_size > LZ4_BUFFER_SIZE)
         lz4_writer_compress(state);
 
@@ -572,5 +568,3 @@ u8 guess_writer_type(char * filename)
         "WARNING: Unrecognised extension on \"%s\", assuming uncompressed (for writing).\n", filename);
     return TRACE_WRITER_TYPE_UNCOMPRESSED;
 }
-
-

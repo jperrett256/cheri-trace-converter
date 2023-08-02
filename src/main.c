@@ -42,7 +42,6 @@ int main(int argc, char * argv[])
 {
     arena_t arena = arena_alloc(MEGABYTES(512));
 
-    // TODO add help text?
     command_t commands[] =
     {
         {
